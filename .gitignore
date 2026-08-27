@@ -1,0 +1,9 @@
+/target
+*.part
+*.mp4
+/android/debug.keystore
+/android/platform/android.jar
+/android/platform/android.jar.*
+*.jks
+*.keystore
+.env

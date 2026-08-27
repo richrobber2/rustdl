@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="download_x_video"
+        android:enabled="true"
+        android:icon="@drawable/icon"
+        android:shortcutShortLabel="@string/share_short_label"
+        android:shortcutLongLabel="@string/share_long_label">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="app.rustdl"
+            android:targetClass="app.rustdl.MainActivity" />
+        <categories android:name="app.rustdl.category.DOWNLOAD" />
+    </shortcut>
+    <share-target android:targetClass="app.rustdl.ShareActivity">
+        <data android:mimeType="text/*" />
+        <category android:name="app.rustdl.category.DOWNLOAD" />
+    </share-target>
+</shortcuts>

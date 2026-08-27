@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="share_short_label">Download video</string>
+    <string name="share_long_label">Download with RustDL</string>
+</resources>
