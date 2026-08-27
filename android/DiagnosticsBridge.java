@@ -1,6 +1,8 @@
 package app.rustdl;
 
 import android.app.ActivityManager;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -26,40 +28,96 @@ final class DiagnosticsBridge {
     }
 
     @JavascriptInterface
-    public String diagnostics() {
+    public boolean copySnapshot(String snapshot) {
+        if (snapshot == null || snapshot.length() > 65_536) return false;
         try {
-            double[] load = loadAverage();
+            ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(
+                    Context.CLIPBOARD_SERVICE);
+            if (clipboard == null) return false;
+            clipboard.setPrimaryClip(ClipData.newPlainText("RustDL diagnostics", snapshot));
+            return true;
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
+    @JavascriptInterface
+    public String diagnostics() {
+        double[] load = loadAverage();
+        long[] memory = memoryState();
+        long[] storage = storageState();
+        BatteryState battery = batteryState();
+        int thermalStatus = thermalStatus();
+        int available = 0;
+        if (load[0] >= 0) available++;
+        if (memory[0] > 0) available++;
+        if (storage[0] > 0) available++;
+        if (battery.level >= 0 || battery.temperature >= 0) available++;
+        if (thermalStatus >= 0) available++;
+
+        String data = "{\"timestamp\":" + System.currentTimeMillis()
+                + ",\"uptimeSeconds\":" + (SystemClock.elapsedRealtime() / 1000.0)
+                + ",\"processors\":" + Runtime.getRuntime().availableProcessors()
+                + ",\"load1\":" + number(load[0])
+                + ",\"load5\":" + number(load[1])
+                + ",\"load15\":" + number(load[2])
+                + ",\"memoryTotalBytes\":" + memory[0]
+                + ",\"memoryAvailableBytes\":" + memory[1]
+                + ",\"storageTotalBytes\":" + storage[0]
+                + ",\"storageAvailableBytes\":" + storage[1]
+                + ",\"batteryLevel\":" + battery.level
+                + ",\"batteryStatus\":\"" + battery.status + "\""
+                + ",\"batteryTemperatureC\":" + number(battery.temperature)
+                + ",\"thermalStatus\":" + thermalStatus
+                + ",\"availableSources\":" + available
+                + ",\"totalSources\":5"
+                + ",\"rustdlPid\":" + Process.myPid() + "}";
+        return "{\"ok\":true,\"detail\":\"" + available
+                + "/5 sources available\",\"data\":" + data + "}";
+    }
+
+    private long[] memoryState() {
+        try {
             ActivityManager manager = (ActivityManager) activity.getSystemService(
                     Context.ACTIVITY_SERVICE);
+            if (manager == null) return new long[]{-1, -1};
             ActivityManager.MemoryInfo memory = new ActivityManager.MemoryInfo();
-            if (manager != null) manager.getMemoryInfo(memory);
+            manager.getMemoryInfo(memory);
+            return new long[]{memory.totalMem, memory.availMem};
+        } catch (RuntimeException unavailable) {
+            return new long[]{-1, -1};
+        }
+    }
 
+    private long[] storageState() {
+        try {
             StatFs storage = new StatFs(activity.getFilesDir().getAbsolutePath());
+            return new long[]{storage.getTotalBytes(), storage.getAvailableBytes()};
+        } catch (RuntimeException unavailable) {
+            return new long[]{-1, -1};
+        }
+    }
+
+    private BatteryState batteryState() {
+        try {
             Intent battery = activity.registerReceiver(
                     null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-            int batteryLevel = scaledBatteryLevel(battery);
             int rawTemperature = battery == null
                     ? -1 : battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1);
-            double batteryTemperature = rawTemperature < 0 ? -1 : rawTemperature / 10.0;
-
-            String data = "{\"timestamp\":" + System.currentTimeMillis()
-                    + ",\"uptimeSeconds\":" + (SystemClock.elapsedRealtime() / 1000.0)
-                    + ",\"processors\":" + Runtime.getRuntime().availableProcessors()
-                    + ",\"load1\":" + number(load[0])
-                    + ",\"load5\":" + number(load[1])
-                    + ",\"load15\":" + number(load[2])
-                    + ",\"memoryTotalBytes\":" + memory.totalMem
-                    + ",\"memoryAvailableBytes\":" + memory.availMem
-                    + ",\"storageTotalBytes\":" + storage.getTotalBytes()
-                    + ",\"storageAvailableBytes\":" + storage.getAvailableBytes()
-                    + ",\"batteryLevel\":" + batteryLevel
-                    + ",\"batteryStatus\":\"" + batteryStatus(battery) + "\""
-                    + ",\"batteryTemperatureC\":" + number(batteryTemperature)
-                    + ",\"thermalStatus\":" + activity.currentThermalStatus()
-                    + ",\"rustdlPid\":" + Process.myPid() + "}";
-            return "{\"ok\":true,\"detail\":\"APK-local\",\"data\":" + data + "}";
+            return new BatteryState(
+                    scaledBatteryLevel(battery),
+                    rawTemperature < 0 ? -1 : rawTemperature / 10.0,
+                    batteryStatus(battery));
         } catch (RuntimeException unavailable) {
-            return "{\"ok\":false,\"detail\":\"Android telemetry unavailable\",\"data\":null}";
+            return new BatteryState(-1, -1, "Unavailable");
+        }
+    }
+
+    private int thermalStatus() {
+        try {
+            return activity.currentThermalStatus();
+        } catch (RuntimeException unavailable) {
+            return -1;
         }
     }
 
@@ -101,5 +159,17 @@ final class DiagnosticsBridge {
 
     private static String number(double value) {
         return Double.isFinite(value) ? Double.toString(value) : "-1";
+    }
+
+    private static final class BatteryState {
+        final int level;
+        final double temperature;
+        final String status;
+
+        BatteryState(int level, double temperature, String status) {
+            this.level = level;
+            this.temperature = temperature;
+            this.status = status;
+        }
     }
 }

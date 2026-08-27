@@ -142,7 +142,9 @@ ADB process, external executable, privileged receiver, or setup step is required
 Diagnostics intentionally exclude logcat, notifications, media filenames, Wi-Fi
 identity, location, other-app enumeration, and screen content. The route and Java
 bridge are unavailable in inspection mode. Sampling pauses whenever the page is
-hidden and resumes when it becomes visible.
+hidden and resumes when it becomes visible. Sources fail independently: if Android
+restricts one reading, its card says so while every available metric continues to
+refresh.
 
 ### No-user-data UI inspection
 
