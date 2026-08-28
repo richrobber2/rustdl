@@ -8,6 +8,8 @@ mod live_events_tests;
 mod settings;
 #[cfg(test)]
 mod settings_tests;
+#[cfg(test)]
+mod streaming_tests;
 
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
@@ -539,6 +541,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
   if(video){
     const audioOnly=video instanceof HTMLAudioElement;
     const filename=video.dataset.filename;
+    const growing=video.dataset.growing==='true';
     const frame=video.closest('.player-frame');
     const toast=document.querySelector('.seek-toast');
     const rates=[0.5,0.75,1,1.25,1.5,2];
@@ -547,6 +550,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     let toastTimer=0;
     let idleTimer=0;
     let downloadFraction=1;
+    let bufferedFraction=0;
     let currentState=null;
     let sleepTimer=0;
     let seekingPointer=null;
@@ -600,6 +604,22 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       time.textContent=formatTime(video.currentTime)+' / '+formatTime(duration);
       play.textContent=video.paused?'▶':'❚❚';play.setAttribute('aria-label',video.paused?'Play':'Pause');
     };
+    const bufferedEnd=()=>{
+      const duration=finite(video.duration)?video.duration:0;if(!duration)return 0;let limit=0;
+      for(let index=0;index<video.buffered.length;index++){const start=video.buffered.start(index),end=video.buffered.end(index);if(start<=limit+.35||video.currentTime>=start-.35&&video.currentTime<=end+.35)limit=Math.max(limit,end)}
+      return clamp(limit,0,duration);
+    };
+    const syncBuffered=()=>{
+      const duration=finite(video.duration)?video.duration:0;bufferedFraction=duration?clamp(bufferedEnd()/duration,0,1):0;
+      const ready=!growing||currentState&&currentState.phase==="ready",playable=ready?1:(bufferedFraction||downloadFraction);boundary.style.left=(playable*100)+"%";boundary.style.opacity=ready?"0":"1";
+    };
+    const isBuffered=time=>{for(let index=0;index<video.buffered.length;index++)if(time>=video.buffered.start(index)-.05&&time<=video.buffered.end(index)-.2)return true;return false};
+    const seekSafely=(requested,notify=true)=>{
+      const duration=finite(video.duration)?video.duration:0;if(!duration)return false;requested=clamp(requested,0,duration);
+      if(!growing||currentState&&currentState.phase==="ready"||requested<=video.currentTime||isBuffered(requested)){video.currentTime=requested;return true}
+      const limit=bufferedEnd(),target=Math.max(0,limit-.35);video.currentTime=target;if(notify)showToast("Waiting for download");return false;
+    };
+    const seekBy=delta=>{const before=video.currentTime;if(seekSafely(before+delta))showSeek(Math.round(video.currentTime-before))};
     const togglePlayback=()=>video.paused?video.play().catch(()=>{}):video.pause();
     play.addEventListener('click',togglePlayback);
     video.addEventListener('click',togglePlayback);
@@ -617,10 +637,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       timeline.value=String(Math.round(fraction*1000));previewSeek();
     };
     const commitSeek=()=>{
-      const requested=Number(timeline.value)/1000;
-      if(currentState&&currentState.phase!=='ready'&&requested>downloadFraction){
-        video.currentTime=Math.max(0,(video.duration||0)*downloadFraction-.5);showToast('Waiting for download');
-      }else video.currentTime=(video.duration||0)*requested;
+      seekSafely((video.duration||0)*Number(timeline.value)/1000);
       preview.classList.remove('visible');updateControls();
     };
     timeline.addEventListener('pointerdown',event=>{
@@ -681,10 +698,11 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     const applySaved=()=>{
       let rate=loadRate();if(!rates.includes(rate))rate=1;applyRate(rate);
       const position=loadPosition(filename);
-      if(finite(position)&&position>=5&&position<video.duration-5)video.currentTime=position;
+      if(finite(position)&&position>=5&&position<video.duration-5)seekSafely(position,false);
       updateControls();
     };
     if(video.readyState>=1)applySaved();else video.addEventListener('loadedmetadata',applySaved,{once:true});
+    ['progress','canplay','durationchange'].forEach(type=>video.addEventListener(type,syncBuffered));
     video.addEventListener('timeupdate',()=>{
       updateControls();
       if(Date.now()-lastSaved>=2000){lastSaved=Date.now();savePosition(filename,video.currentTime,video.duration)}
@@ -693,12 +711,12 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     video.addEventListener('pause',()=>{updateControls();revealControls();savePosition(filename,video.currentTime,video.duration);if(bridge)bridge.setPlaying(false);if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused'});
     video.addEventListener('play',()=>{updateControls();revealControls();if(bridge)bridge.setPlaying(!audioOnly);if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing'});
     video.addEventListener('ended',()=>{if(bridge){bridge.markWatched(filename);bridge.setPlaying(false)}else{clearPosition(filename);localStorage.setItem('rustdl:watched:'+filename,'1')}});
-    video.addEventListener('dblclick',event=>{const delta=event.offsetX<video.clientWidth/2?-10:10;video.currentTime=clamp(video.currentTime+delta,0,video.duration||0);showSeek(delta)});
+    video.addEventListener('dblclick',event=>seekBy(event.offsetX<video.clientWidth/2?-10:10));
     addEventListener('keydown',event=>{
       if(event.target instanceof HTMLInputElement||event.target instanceof HTMLButtonElement)return;
       if(event.code==='Space'){event.preventDefault();togglePlayback()}
-      if(event.code==='ArrowLeft'){video.currentTime=clamp(video.currentTime-10,0,video.duration||0);showSeek(-10)}
-      if(event.code==='ArrowRight'){video.currentTime=clamp(video.currentTime+10,0,video.duration||0);showSeek(10)}
+      if(event.code==='ArrowLeft')seekBy(-10)
+      if(event.code==='ArrowRight')seekBy(10)
     });
 
     const updateDownloadState=state=>{
@@ -706,8 +724,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       if(!currentState)return;
       const total=Number(currentState.total||0);const saved=Number(currentState.downloaded||0);
       downloadFraction=total?clamp(saved/total,0,1):currentState.phase==='ready'?1:0;
-      downloaded.style.width=(downloadFraction*100)+'%';boundary.style.left=(downloadFraction*100)+'%';
-      boundary.style.opacity=currentState.phase==='ready'?'0':'1';
+      downloaded.style.width=(downloadFraction*100)+'%';syncBuffered();
       downloadLabel.textContent=currentState.phase==='ready'?'Saved locally':formatBytes(saved)+(total?' / '+formatBytes(total):'')+' downloaded';
       moreMenu.querySelector('[data-quality]').textContent='Quality · '+(currentState.quality||currentState.height&&currentState.height+'p'||'original');
       const requality=moreMenu.querySelector('[data-requality]');
@@ -725,7 +742,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       const metadata={title:filename,artist:'RustDL',album:audioOnly?'Saved audio':'Saved videos'};
       if(!audioOnly)metadata.artwork=[{src:'/thumbnail/'+encodeURIComponent(filename)+'.jpg',type:'image/jpeg'}];
       navigator.mediaSession.metadata=new MediaMetadata(metadata);
-      const handlers={play:()=>video.play(),pause:()=>video.pause(),stop:()=>{video.pause();video.currentTime=0},seekbackward:event=>{video.currentTime=clamp(video.currentTime-(event.seekOffset||10),0,video.duration||0)},seekforward:event=>{video.currentTime=clamp(video.currentTime+(event.seekOffset||10),0,video.duration||0)},seekto:event=>{if(finite(event.seekTime))video.currentTime=clamp(event.seekTime,0,video.duration||0)},previoustrack:()=>{video.currentTime=0}};
+      const handlers={play:()=>video.play(),pause:()=>video.pause(),stop:()=>{video.pause();video.currentTime=0},seekbackward:event=>seekBy(-(event.seekOffset||10)),seekforward:event=>seekBy(event.seekOffset||10),seekto:event=>{if(finite(event.seekTime))seekSafely(event.seekTime)},previoustrack:()=>{video.currentTime=0}};
       Object.entries(handlers).forEach(([action,handler])=>{try{navigator.mediaSession.setActionHandler(action,handler)}catch(_error){}});
     }
     addEventListener('pagehide',()=>{clearTimeout(sleepTimer);savePosition(filename,video.currentTime,video.duration);if(bridge){bridge.setPlaying(false);bridge.setRotationLocked(false)}});
@@ -1034,6 +1051,7 @@ static QUEUE_OUTPUT_DIR: OnceLock<PathBuf> = OnceLock::new();
 static DOWNLOAD_GATE: OnceLock<(Mutex<usize>, Condvar)> = OnceLock::new();
 static SCHEDULED_WORKERS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static LAST_TRANSFER_NOTICE: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+static DOWNLOAD_PROGRESS_SIGNAL: OnceLock<(Mutex<u64>, Condvar)> = OnceLock::new();
 static EVENT_REVISION: AtomicU64 = AtomicU64::new(0);
 static DISCOVERY_SESSIONS: OnceLock<Mutex<HashMap<String, DiscoverySession>>> = OnceLock::new();
 static PLAYLIST_SESSIONS: OnceLock<Mutex<HashMap<String, PlaylistSession>>> = OnceLock::new();
@@ -2878,6 +2896,14 @@ fn respond_peer_status(request: Request, status: PeerStatus) -> Result<(), Box<d
 
 const CHANGELOG: &[(&str, &[&str])] = &[
     (
+        "0.1.32",
+        &[
+            "Made progressive playback seek against real browser-buffered time ranges instead of assuming byte percentage equals video time.",
+            "Applied safe streaming seeks to touch, keyboard, double-tap, restored position, and Android media-session controls.",
+            "Replaced growing-file polling with immediate Rust condition-variable wakeups when new download bytes arrive.",
+        ],
+    ),
+    (
         "0.1.31",
         &[
             "Added a live Activity Center for downloads, device transfers, storage pressure, and app updates.",
@@ -3130,6 +3156,7 @@ const CHANGELOG: &[(&str, &[&str])] = &[
 
 fn changelog_destinations(version: &str) -> &'static [(&'static str, &'static str)] {
     match version {
+        "0.1.32" => &[("/#gallery-library", "Streaming player")],
         "0.1.31" => &[("/activity", "Activity Center")],
         "0.1.30" => &[("/queue", "Live queue"), ("/#gallery-library", "Gallery")],
         "0.1.29" => &[("/settings", "Settings")],
@@ -5860,7 +5887,18 @@ fn update_download_progress(filename: &str, downloaded: u64, total: Option<u64>)
     notify_transfer_state(false);
 }
 
+fn signal_growing_media() {
+    let (generation, changed) =
+        DOWNLOAD_PROGRESS_SIGNAL.get_or_init(|| (Mutex::new(0), Condvar::new()));
+    let mut generation = generation
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *generation = generation.wrapping_add(1);
+    changed.notify_all();
+}
+
 fn notify_transfer_state(force: bool) {
+    signal_growing_media();
     if TRANSFER_HOOK.get().is_none() && EVENT_HOOK.get().is_none() {
         return;
     }
@@ -6123,6 +6161,11 @@ fn respond_download_result(
             "stream",
         ),
     };
+    let growing = if outcome == DownloadOutcome::Duplicate {
+        "false"
+    } else {
+        "true"
+    };
     let filename = output
         .file_name()
         .and_then(|name| name.to_str())
@@ -6139,7 +6182,7 @@ fn respond_download_result(
 <link rel="stylesheet" href="{player_css}"></head><body><main class="player-shell">
 <div class="topline"><a class="brand" href="/"><span class="brand-mark">↓</span><span>RustDL</span></a><span class="context-pill"><i></i>{status}</span></div>
 <header><span class="eyebrow">Download status</span><h1>{heading}</h1><p class="copy">{detail}</p></header>
-<section class="player-frame" style="view-transition-name:{transition_name}"><div class="player-toolbar"><span>{toolbar}</span><div class="player-actions"><button class="player-control" type="button" data-player-speed>1×</button><button class="player-control" type="button" data-player-rotation aria-pressed="false">Lock rotation</button><button class="player-control" type="button" data-player-pip>PiP</button><span class="codec">MP4</span></div></div><video controls playsinline preload="auto" data-filename="{filename}" src="/{media_route}/{filename}">Your browser does not support HTML5 video.</video><span class="seek-toast" aria-live="polite"></span></section>
+<section class="player-frame" style="view-transition-name:{transition_name}"><div class="player-toolbar"><span>{toolbar}</span><div class="player-actions"><button class="player-control" type="button" data-player-speed>1×</button><button class="player-control" type="button" data-player-rotation aria-pressed="false">Lock rotation</button><button class="player-control" type="button" data-player-pip>PiP</button><span class="codec">MP4</span></div></div><video controls playsinline preload="auto" data-filename="{filename}" data-growing="{growing}" src="/{media_route}/{filename}">Your browser does not support HTML5 video.</video><span class="seek-toast" aria-live="polite"></span></section>
 <div class="meta-card"><div class="file-block"><span class="meta-label">Download target</span><code>{saved_path}</code></div><a class="action" href="/"><span>▦</span>Open gallery</a></div>
 </main>{playback_script}{view_transition_script}{dev_reload}</body></html>"#,
     );
@@ -6193,13 +6236,14 @@ fn respond_watch_page(
     let dev_reload = dev_reload_script();
     let audio_only = is_audio_filename(filename);
     let codec = if audio_only { "M4A" } else { "MP4" };
+    let growing = if ready { "false" } else { "true" };
     let media_element = if audio_only {
         format!(
-            r#"<audio class="audio-player" controls autoplay preload="auto" data-filename="{filename}" src="/{media_route}/{filename}">Your browser does not support HTML5 audio.</audio>"#
+            r#"<audio class="audio-player" controls autoplay preload="auto" data-filename="{filename}" data-growing="{growing}" src="/{media_route}/{filename}">Your browser does not support HTML5 audio.</audio>"#
         )
     } else {
         format!(
-            r#"<video controls autoplay playsinline preload="auto" data-filename="{filename}" poster="/thumbnail/{filename}.jpg" src="/{media_route}/{filename}">Your browser does not support HTML5 video.</video>"#
+            r#"<video controls autoplay playsinline preload="auto" data-filename="{filename}" data-growing="{growing}" poster="/thumbnail/{filename}.jpg" src="/{media_route}/{filename}">Your browser does not support HTML5 video.</video>"#
         )
     };
     let saved_kind = if audio_only {
@@ -6361,7 +6405,20 @@ impl Read for GrowingFile {
                             | DownloadPhase::Downloading
                     ) =>
                 {
-                    thread::sleep(Duration::from_millis(75));
+                    let (generation, changed) =
+                        DOWNLOAD_PROGRESS_SIGNAL.get_or_init(|| (Mutex::new(0), Condvar::new()));
+                    let generation = generation
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let observed = *generation;
+                    if self.file.metadata()?.len() > self.position {
+                        continue;
+                    }
+                    let _ = changed
+                        .wait_timeout_while(generation, Duration::from_secs(1), |value| {
+                            *value == observed
+                        })
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                 }
                 _ => return Ok(0),
             }
@@ -7484,7 +7541,7 @@ mod tests {
 
     #[test]
     fn changelog_covers_every_version_and_marks_the_current_release() {
-        assert_eq!(CHANGELOG.len(), 32);
+        assert_eq!(CHANGELOG.len(), 33);
         for (index, (version, changes)) in CHANGELOG.iter().rev().enumerate() {
             assert_eq!(*version, format!("0.1.{index}"));
             assert!(!changes.is_empty());
@@ -7506,7 +7563,7 @@ mod tests {
         assert!(html.contains(r#"id="version-go""#));
         assert!(html.contains("scrollIntoView"));
         assert!(html.contains("history.replaceState"));
-        assert_eq!(html.matches(r#"class="release-actions""#).count(), 30);
+        assert_eq!(html.matches(r#"class="release-actions""#).count(), 31);
         assert!(html.contains("Go to Settings"));
         assert!(html.contains("Go to Diagnostics"));
         assert!(!html.contains(r#"href="/control"#));
