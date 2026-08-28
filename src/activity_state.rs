@@ -89,9 +89,15 @@ pub(crate) fn snapshot() -> serde_json::Value {
             "issues": download_counts[1] + transfer_counts[1],
             "completed": download_counts[2] + transfer_counts[2],
         },
-        "downloads": downloads.iter().take(60)
-            .map(|(filename, job)| app_state_job(filename, job))
-            .collect::<Vec<_>>(),
+        "downloads": downloads.iter().take(60).map(|(filename, job)| serde_json::json!({
+            "filename": filename,
+            "phase": download_phase_name(job.phase),
+            "downloaded": job.downloaded,
+            "total": job.total,
+            "quality": job.quality_label,
+            "height": job.quality_height,
+            "error": job.error,
+        })).collect::<Vec<_>>(),
         "transfers": transfers.iter().take(30).map(|(filename, job)| serde_json::json!({
             "filename": filename,
             "phase": job.phase,

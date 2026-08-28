@@ -23,6 +23,7 @@ fn activity_snapshot_omits_sensitive_transfer_fields() {
     assert!(transfer_json.contains("\"filename\""));
     assert!(transfer_json.contains("\"phase\""));
     assert!(!transfer_json.contains("\"peer\""));
+    assert!(!source.contains("\"source\""));
     assert!(source.contains("storageLow"));
     assert!(source.contains("take(60)"));
 }
