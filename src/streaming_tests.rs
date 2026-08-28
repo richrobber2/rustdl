@@ -9,6 +9,11 @@ fn progressive_seek_uses_real_browser_buffer_ranges() {
     assert!(PLAYBACK_SCRIPT.contains("seekto:event=>{if(finite(event.seekTime))seekSafely"));
     assert!(PLAYBACK_SCRIPT.contains("['progress','canplay','durationchange']"));
     assert!(!PLAYBACK_SCRIPT.contains("requested>downloadFraction"));
+    assert!(PLAYBACK_SCRIPT.contains("const queuePreview="));
+    assert!(PLAYBACK_SCRIPT.contains("previewVideo.fastSeek"));
+    assert!(PLAYBACK_SCRIPT.contains("previewTimer=setTimeout"));
+    assert!(PLAYBACK_SCRIPT.contains("requested<=video.currentTime||isBuffered(requested)"));
+    assert!(PLAYBACK_SCRIPT.contains("<video muted playsinline preload=\"metadata\""));
 }
 
 #[test]

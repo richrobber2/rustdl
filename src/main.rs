@@ -362,7 +362,11 @@ const PLAYER_CSS: &str = r#"
       box-shadow: 0 14px 38px #000b; pointer-events: none; translate: -50% 0;
     }
     .scrub-preview.visible { display: grid; }
-    .scrub-preview img { width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #020305; }
+    .scrub-preview img, .scrub-preview video { width: 100%; max-height: none; aspect-ratio: 16/9; object-fit: cover; border: 0; border-radius: 0; background: #020305; }
+    .scrub-preview video { display: none; }
+    .scrub-preview.has-frame video { display: block; }
+    .scrub-preview.has-frame img { display: none; }
+    .scrub-preview.waiting img { opacity: .42; }
     .scrub-preview output { padding: .4rem; font: 800 .67rem/1 ui-monospace, monospace; text-align: center; }
     .download-boundary { position: absolute; z-index: 4; top: .25rem; bottom: .25rem; width: 2px; border-radius: 2px; background: #f6c760; box-shadow: 0 0 0 3px #f6c728; opacity: 0; pointer-events: none; }
     .download-label { display: block; margin: .42rem .5rem .12rem; color: #aeb5c4; font: 700 .63rem/1 system-ui; text-align: right; pointer-events: none; }
@@ -563,7 +567,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
 
     const island=document.createElement('div');
     island.className='control-island';island.setAttribute('role','group');island.setAttribute('aria-label',audioOnly?'Audio controls':'Video controls');
-    island.innerHTML='<button class="control-button" type="button" data-control-play aria-label="Play">▶</button><span class="control-time" data-control-time>0:00 / 0:00</span><div class="timeline-shell"><span class="timeline-track"></span><span class="timeline-downloaded"></span><span class="timeline-played"></span><span class="download-boundary"></span><span class="scrub-anchor"></span><span class="scrub-preview"><img alt=""><output>0:00</output></span><input class="timeline-input" type="range" min="0" max="1000" value="0" aria-label="Seek video"></div><button class="control-button" type="button" data-control-mute aria-label="Mute">Vol</button><button class="control-button" type="button" data-control-speed aria-label="Playback speed">1×</button><button class="control-button" type="button" data-control-pip aria-label="Picture in picture">PiP</button><button class="control-button" type="button" data-control-more aria-label="More playback controls">•••</button><button class="control-button" type="button" data-control-fullscreen aria-label="Fullscreen">⛶</button>';
+    island.innerHTML='<button class="control-button" type="button" data-control-play aria-label="Play">▶</button><span class="control-time" data-control-time>0:00 / 0:00</span><div class="timeline-shell"><span class="timeline-track"></span><span class="timeline-downloaded"></span><span class="timeline-played"></span><span class="download-boundary"></span><span class="scrub-anchor"></span><span class="scrub-preview"><img alt=""><video muted playsinline preload="metadata" aria-hidden="true"></video><output>0:00</output></span><input class="timeline-input" type="range" min="0" max="1000" value="0" aria-label="Seek video"></div><button class="control-button" type="button" data-control-mute aria-label="Mute">Vol</button><button class="control-button" type="button" data-control-speed aria-label="Playback speed">1×</button><button class="control-button" type="button" data-control-pip aria-label="Picture in picture">PiP</button><button class="control-button" type="button" data-control-more aria-label="More playback controls">•••</button><button class="control-button" type="button" data-control-fullscreen aria-label="Fullscreen">⛶</button>';
     const downloadLabel=document.createElement('span');downloadLabel.className='download-label';downloadLabel.textContent='Saved locally';
     const speedMenu=document.createElement('div');speedMenu.id='speed-popover';speedMenu.className='control-popover';speedMenu.setAttribute('popover','auto');
     speedMenu.innerHTML='<h3>Playback speed</h3><div class="control-popover-grid"></div>';
@@ -582,7 +586,11 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     const scrubAnchor=island.querySelector('.scrub-anchor');
     const preview=island.querySelector('.scrub-preview');
     const previewImage=preview.querySelector('img');
+    const previewVideo=preview.querySelector('video');
     const previewTime=preview.querySelector('output');
+    let previewTimer=0;
+    let previewTarget=0;
+    let previewSequence=0;
     const mute=island.querySelector('[data-control-mute]');
     const speed=island.querySelector('[data-control-speed]');
     const pip=island.querySelector('[data-control-pip]');
@@ -620,6 +628,20 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       const limit=bufferedEnd(),target=Math.max(0,limit-.35);video.currentTime=target;if(notify)showToast("Waiting for download");return false;
     };
     const seekBy=delta=>{const before=video.currentTime;if(seekSafely(before+delta))showSeek(Math.round(video.currentTime-before))};
+    const queuePreview=requested=>{
+      if(audioOnly)return;previewTarget=requested;previewSequence++;
+      const available=!growing||currentState&&currentState.phase==='ready'||requested<=video.currentTime||isBuffered(requested);
+      preview.classList.toggle('waiting',!available);
+      if(!available){clearTimeout(previewTimer);previewTimer=0;preview.classList.remove('has-frame');previewTime.value=formatTime(requested)+' · waiting';return}
+      previewTime.value=formatTime(requested);if(previewTimer)return;previewTimer=setTimeout(()=>{previewTimer=0;const sequence=previewSequence;
+        if(!previewVideo.getAttribute('src')){previewVideo.src=video.currentSrc||video.src;previewVideo.load()}
+        const seek=()=>{if(sequence!==previewSequence)return;previewVideo.dataset.sequence=String(sequence);const duration=finite(previewVideo.duration)?previewVideo.duration:video.duration||0,target=clamp(previewTarget,0,duration);if(Math.abs(previewVideo.currentTime-target)<.08){preview.classList.add('has-frame');return}if(typeof previewVideo.fastSeek==='function')previewVideo.fastSeek(target);else previewVideo.currentTime=target};
+        if(previewVideo.readyState>=1)seek();else previewVideo.onloadedmetadata=seek;
+      },70);
+    };
+    previewVideo.addEventListener('seeked',()=>{if(Number(previewVideo.dataset.sequence)!==previewSequence)return;preview.classList.remove('waiting');preview.classList.add('has-frame')});
+    previewVideo.addEventListener('error',()=>preview.classList.remove('has-frame'));
+    const hidePreview=()=>{clearTimeout(previewTimer);previewTimer=0;preview.classList.remove('visible')};
     const togglePlayback=()=>video.paused?video.play().catch(()=>{}):video.pause();
     play.addEventListener('click',togglePlayback);
     video.addEventListener('click',togglePlayback);
@@ -628,7 +650,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       const percent=Number(timeline.value)/10;
       scrubAnchor.style.left=percent+'%';preview.style.left=percent+'%';
       played.style.width=percent+'%';
-      previewTime.value=formatTime((video.duration||0)*percent/100);preview.classList.add('visible');
+      const requested=(video.duration||0)*percent/100;previewTime.value=formatTime(requested);preview.classList.add('visible');queuePreview(requested);
     };
     timeline.addEventListener('input',previewSeek);
     const seekFromPointer=event=>{
@@ -638,7 +660,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     };
     const commitSeek=()=>{
       seekSafely((video.duration||0)*Number(timeline.value)/1000);
-      preview.classList.remove('visible');updateControls();
+      hidePreview();updateControls();
     };
     timeline.addEventListener('pointerdown',event=>{
       if(event.pointerType==='mouse'&&event.button!==0)return;
@@ -657,7 +679,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     timeline.addEventListener('pointercancel',event=>{
       if(seekingPointer!==event.pointerId)return;
       event.preventDefault();event.stopPropagation();seekingPointer=null;
-      preview.classList.remove('visible');updateControls();
+      hidePreview();updateControls();
     });
     timeline.addEventListener('click',event=>event.preventDefault());
     timeline.addEventListener('change',commitSeek);
@@ -2896,6 +2918,14 @@ fn respond_peer_status(request: Request, status: PeerStatus) -> Result<(), Box<d
 
 const CHANGELOG: &[(&str, &[&str])] = &[
     (
+        "0.1.33",
+        &[
+            "Added on-the-fly video-frame previews while dragging or tapping the seeker.",
+            "Throttled preview decoding to the latest gesture position and used fast keyframe seeking when WebView supports it.",
+            "Kept active-download previews inside real buffered ranges and showed a waiting state beyond available media.",
+        ],
+    ),
+    (
         "0.1.32",
         &[
             "Made progressive playback seek against real browser-buffered time ranges instead of assuming byte percentage equals video time.",
@@ -3156,6 +3186,7 @@ const CHANGELOG: &[(&str, &[&str])] = &[
 
 fn changelog_destinations(version: &str) -> &'static [(&'static str, &'static str)] {
     match version {
+        "0.1.33" => &[("/#gallery-library", "Seek previews")],
         "0.1.32" => &[("/#gallery-library", "Streaming player")],
         "0.1.31" => &[("/activity", "Activity Center")],
         "0.1.30" => &[("/queue", "Live queue"), ("/#gallery-library", "Gallery")],
@@ -7541,7 +7572,7 @@ mod tests {
 
     #[test]
     fn changelog_covers_every_version_and_marks_the_current_release() {
-        assert_eq!(CHANGELOG.len(), 33);
+        assert_eq!(CHANGELOG.len(), 34);
         for (index, (version, changes)) in CHANGELOG.iter().rev().enumerate() {
             assert_eq!(*version, format!("0.1.{index}"));
             assert!(!changes.is_empty());
@@ -7563,7 +7594,7 @@ mod tests {
         assert!(html.contains(r#"id="version-go""#));
         assert!(html.contains("scrollIntoView"));
         assert!(html.contains("history.replaceState"));
-        assert_eq!(html.matches(r#"class="release-actions""#).count(), 31);
+        assert_eq!(html.matches(r#"class="release-actions""#).count(), 32);
         assert!(html.contains("Go to Settings"));
         assert!(html.contains("Go to Diagnostics"));
         assert!(!html.contains(r#"href="/control"#));
