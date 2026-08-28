@@ -44,6 +44,8 @@ import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.widget.Toast;
 
+import org.json.JSONObject;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -287,6 +289,9 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                if (!inspectionMode) {
+                    dispatchRustEvent("{\"type\":\"sync\",\"version\":1}");
+                }
                 if (!captureInspection || captureScheduled || !isExpectedInspectionUrl(url)) {
                     return;
                 }
@@ -582,6 +587,32 @@ public class MainActivity extends Activity {
             }
         }
         return urls.length() == 0 ? null : urls.toString();
+    }
+
+    public void dispatchRustEvent(String eventJson) {
+        if (inspectionMode || eventJson == null || eventJson.length() > 2_048) return;
+        final String encoded;
+        try {
+            JSONObject event = new JSONObject(eventJson);
+            String type = event.optString("type", "");
+            if (!("queue".equals(type) || "sync".equals(type))
+                    || event.optInt("version", -1) != 1) {
+                return;
+            }
+            encoded = JSONObject.quote(event.toString());
+        } catch (Exception invalid) {
+            return;
+        }
+        handler.post(() -> {
+            if (webView == null || webView.getUrl() == null) return;
+            Uri current = Uri.parse(webView.getUrl());
+            if (!"127.0.0.1".equals(current.getHost()) || current.getPort() != 37658) return;
+            webView.evaluateJavascript(
+                    "(()=>{try{const detail=JSON.parse(" + encoded
+                            + ");window.dispatchEvent(new CustomEvent('rustdl:state',{detail}))"
+                            + "}catch(_error){}})();",
+                    null);
+        });
     }
 
     public void updateTransferNotification(int count, long downloaded, long total) {

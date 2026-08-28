@@ -1,3 +1,6 @@
+mod live_events;
+#[cfg(test)]
+mod live_events_tests;
 mod settings;
 #[cfg(test)]
 mod settings_tests;
@@ -27,7 +30,10 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::{Condvar, Mutex, Once, OnceLock};
+use std::sync::{
+    Condvar, Mutex, Once, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
@@ -702,8 +708,13 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       const requality=moreMenu.querySelector('[data-requality]');
       if(currentState.source){requality.href='/discover?source='+encodeURIComponent(currentState.source);requality.hidden=false}
     };
-    const pollState=()=>fetchState(filename).then(state=>{if(state)updateDownloadState(state);setTimeout(pollState,currentState&&currentState.phase!=='ready'?1000:5000)});
-    pollState();
+    let downloadStatePending=false;
+    const refreshDownloadState=()=>{
+      if(downloadStatePending)return;downloadStatePending=true;
+      fetchState(filename).then(state=>{if(state)updateDownloadState(state)}).finally(()=>downloadStatePending=false);
+    };
+    addEventListener('rustdl:state',event=>{if(['queue','sync'].includes(event.detail?.type))refreshDownloadState()});
+    refreshDownloadState();setInterval(()=>{if(!document.hidden)refreshDownloadState()},15000);
 
     if('mediaSession' in navigator&&'MediaMetadata' in window){
       const metadata={title:filename,artist:'RustDL',album:audioOnly?'Saved audio':'Saved videos'};
@@ -795,8 +806,13 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     const action=job.phase==='paused'?'resume':'pause';const button=mini.querySelector('button');button.textContent=action==='pause'?'Pause':'Resume';
     button.onclick=()=>fetch('/queue/action?file='+encodeURIComponent(job.filename)+'&action='+action,{cache:'no-store'}).finally(refreshState);
   };
-  const refreshState=()=>fetchState().then(state=>{if(state){updateQuickActions(state);updateQueueMini(state)}});
-  refreshState();setInterval(refreshState,2000);
+  let stateRefreshPending=false;
+  const refreshState=()=>{
+    if(stateRefreshPending)return;stateRefreshPending=true;
+    fetchState().then(state=>{if(state){updateQuickActions(state);updateQueueMini(state)}}).finally(()=>stateRefreshPending=false);
+  };
+  addEventListener('rustdl:state',event=>{if(['queue','sync'].includes(event.detail?.type))refreshState()});
+  refreshState();setInterval(()=>{if(!document.hidden)refreshState()},15000);
 })();"#;
 
 #[derive(Debug, Deserialize)]
@@ -990,6 +1006,7 @@ struct ServeArgs {
 
 type PublishHook = fn(&Path, &str) -> Result<bool, String>;
 type TransferHook = fn(TransferSummary) -> Result<(), String>;
+type EventHook = fn(&str) -> Result<(), String>;
 type WatchedHook = fn() -> Result<Vec<String>, String>;
 type DeleteHook = fn(&str) -> Result<(), String>;
 type MuxHook = fn(&Path, &Path, &Path) -> Result<(), String>;
@@ -997,6 +1014,7 @@ type ExtractAudioHook = fn(&Path, &Path) -> Result<(), String>;
 type ThumbnailHook = fn(&Path, &str) -> Result<bool, String>;
 static PUBLISH_HOOK: OnceLock<PublishHook> = OnceLock::new();
 static TRANSFER_HOOK: OnceLock<TransferHook> = OnceLock::new();
+static EVENT_HOOK: OnceLock<EventHook> = OnceLock::new();
 static WATCHED_HOOK: OnceLock<WatchedHook> = OnceLock::new();
 static DELETE_HOOK: OnceLock<DeleteHook> = OnceLock::new();
 static MUX_HOOK: OnceLock<MuxHook> = OnceLock::new();
@@ -1008,6 +1026,7 @@ static QUEUE_OUTPUT_DIR: OnceLock<PathBuf> = OnceLock::new();
 static DOWNLOAD_GATE: OnceLock<(Mutex<usize>, Condvar)> = OnceLock::new();
 static SCHEDULED_WORKERS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static LAST_TRANSFER_NOTICE: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+static EVENT_REVISION: AtomicU64 = AtomicU64::new(0);
 static DISCOVERY_SESSIONS: OnceLock<Mutex<HashMap<String, DiscoverySession>>> = OnceLock::new();
 static PLAYLIST_SESSIONS: OnceLock<Mutex<HashMap<String, PlaylistSession>>> = OnceLock::new();
 static PEER_PAIRING: OnceLock<Mutex<Option<PeerPairing>>> = OnceLock::new();
@@ -1392,6 +1411,11 @@ pub(crate) fn set_publish_hook(hook: PublishHook) {
 #[allow(dead_code)]
 pub(crate) fn set_transfer_hook(hook: TransferHook) {
     let _ = TRANSFER_HOOK.set(hook);
+}
+
+#[allow(dead_code)]
+pub(crate) fn set_event_hook(hook: EventHook) {
+    let _ = EVENT_HOOK.set(hook);
 }
 
 #[allow(dead_code)]
@@ -2838,6 +2862,14 @@ fn respond_peer_status(request: Request, status: PeerStatus) -> Result<(), Box<d
 
 const CHANGELOG: &[(&str, &[&str])] = &[
     (
+        "0.1.30",
+        &[
+            "Added a typed Rust-to-Java-to-WebView event bridge for immediate app-state updates.",
+            "Made queue progress, phases, errors, and actions update in place without two-second page reloads.",
+            "Moved the player and gallery to event-driven refreshes with coalescing and a low-frequency recovery fallback.",
+        ],
+    ),
+    (
         "0.1.29",
         &[
             "Added a persistent Settings page backed entirely by the installed APK.",
@@ -3074,6 +3106,7 @@ const CHANGELOG: &[(&str, &[&str])] = &[
 
 fn changelog_destinations(version: &str) -> &'static [(&'static str, &'static str)] {
     match version {
+        "0.1.30" => &[("/queue", "Live queue"), ("/#gallery-library", "Gallery")],
         "0.1.29" => &[("/settings", "Settings")],
         "0.1.28" | "0.1.27" | "0.1.26" | "0.1.23" => &[("/diagnostics", "Diagnostics")],
         "0.1.25" | "0.1.24" => &[("/changelog#version-jump", "version navigation")],
@@ -5114,18 +5147,13 @@ fn respond_queue_page(request: Request, errors: &[String]) -> Result<(), Box<dyn
         .map(|(filename, job)| (filename.clone(), job.clone()))
         .collect::<Vec<_>>();
     jobs.sort_unstable_by(|left, right| right.0.cmp(&left.0));
-    let refresh = jobs.iter().any(|(_, job)| {
-        matches!(
-            job.phase,
-            DownloadPhase::Queued | DownloadPhase::Starting | DownloadPhase::Downloading
-        )
-    });
     let rows = if jobs.is_empty() {
         r#"<div class="empty">The queue is empty. Paste links on the home screen to begin.</div>"#
             .to_owned()
     } else {
         jobs.into_iter()
             .map(|(filename, job)| {
+                let phase_name = download_phase_name(job.phase);
                 let phase = match job.phase {
                     DownloadPhase::Queued => "Queued",
                     DownloadPhase::Starting => "Starting",
@@ -5179,7 +5207,8 @@ fn respond_queue_page(request: Request, errors: &[String]) -> Result<(), Box<dyn
                     .map(|error| format!(r#"<p class="error">{}</p>"#, escape_html(&error)))
                     .unwrap_or_default();
                 format!(
-                    r#"<article><div class="row"><div class="info"><span class="phase">{phase}</span><code>{}</code><span class="size">{size}</span>{quality}</div><nav>{actions}</nav></div><div class="progress">{progress}</div>{error}</article>"#,
+                    r#"<article data-filename="{}" data-phase="{phase_name}"><div class="row"><div class="info"><span class="phase">{phase}</span><code>{}</code><span class="size">{size}</span>{quality}</div><nav>{actions}</nav></div><div class="progress">{progress}</div>{error}</article>"#,
+                    escape_html(&filename),
                     escape_html(&filename)
                 )
             })
@@ -5189,15 +5218,11 @@ fn respond_queue_page(request: Request, errors: &[String]) -> Result<(), Box<dyn
         .iter()
         .map(|error| format!(r#"<p class="batch-error">{error}</p>"#))
         .collect::<String>();
-    let auto_refresh = if refresh {
-        r#"<meta http-equiv="refresh" content="2">"#
-    } else {
-        ""
-    };
     let body = format!(
-        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">{auto_refresh}<title>RustDL queue</title><style>
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RustDL queue</title><style>
 :root{{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif}}*{{box-sizing:border-box}}body{{min-height:100vh;margin:0;padding:clamp(1rem,4vw,3rem);color:#f7f7f8;background:radial-gradient(circle at 15% 0,#273166,transparent 32rem),radial-gradient(circle at 100% 90%,#173e3a,transparent 28rem),#090a0f}}main{{width:min(100%,820px);margin:auto}}header{{display:flex;align-items:end;justify-content:space-between;gap:1rem;margin-bottom:1.25rem}}h1{{margin:.4rem 0 0;font-size:clamp(2.2rem,7vw,4rem);letter-spacing:-.05em}}.eyebrow,.phase{{color:#8fe3d2;font-size:.7rem;font-weight:850;letter-spacing:.12em;text-transform:uppercase}}header a,nav a{{padding:.65rem .8rem;border:1px solid #70dfc948;border-radius:10px;color:#8fe3d2;text-decoration:none;font-size:.76rem;font-weight:800}}section{{display:grid;gap:.75rem}}article,.empty{{padding:1rem;border:1px solid #ffffff18;border-radius:17px;background:#11131bde}}.row{{display:flex;align-items:center;justify-content:space-between;gap:1rem}}.info{{min-width:0;display:grid;gap:.35rem}}code{{overflow:hidden;color:#e0e4ec;font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}}.size{{color:#7e8595;font-size:.72rem;font-variant-numeric:tabular-nums}}.quality{{width:max-content;padding:.25rem .45rem;border:1px solid #70dfc938;border-radius:999px;color:#8fe3d2;background:#70dfc90c;font-size:.65rem;font-weight:750}}nav{{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:.45rem}}nav a.danger{{color:#ffaaa5;border-color:#ff706b42}}.progress{{height:4px;margin-top:.8rem;overflow:hidden;border-radius:99px;background:#ffffff18}}.progress i{{display:block;height:100%;border-radius:inherit;background:#70dfc9}}.error,.batch-error{{margin:.7rem 0 0;color:#ffaaa5;font-size:.76rem;line-height:1.45}}.batch-error{{padding:.7rem 1rem;border-radius:10px;background:#ff706b12}}.empty{{color:#8d94a5}}@media(max-width:600px){{header,.row{{align-items:stretch;flex-direction:column}}nav{{justify-content:flex-start}}}}
-</style></head><body><main><header><div><span class="eyebrow">Persistent downloads</span><h1>Smart queue</h1></div><a href="/">← Gallery</a></header>{errors}<section>{rows}</section></main>{}</body></html>"#,
+</style></head><body><main><header><div><span class="eyebrow">Persistent downloads</span><h1>Smart queue</h1></div><a href="/">← Gallery</a></header>{errors}<section>{rows}</section></main>{}{}</body></html>"#,
+        live_events::QUEUE_SCRIPT,
         dev_reload_script()
     );
     let response = Response::from_string(body)
@@ -5811,9 +5836,9 @@ fn update_download_progress(filename: &str, downloaded: u64, total: Option<u64>)
 }
 
 fn notify_transfer_state(force: bool) {
-    let Some(hook) = TRANSFER_HOOK.get() else {
+    if TRANSFER_HOOK.get().is_none() && EVENT_HOOK.get().is_none() {
         return;
-    };
+    }
     let now = Instant::now();
     if !force {
         let mut last = LAST_TRANSFER_NOTICE
@@ -5848,8 +5873,24 @@ fn notify_transfer_state(force: bool) {
                 summary
             },
         );
-    if let Err(error) = hook(summary) {
+    if let Some(hook) = TRANSFER_HOOK.get()
+        && let Err(error) = hook(summary)
+    {
         eprintln!("Android transfer notification warning: {error}");
+    }
+    if let Some(hook) = EVENT_HOOK.get() {
+        let event = serde_json::json!({
+            "type": "queue",
+            "version": 1,
+            "revision": EVENT_REVISION.fetch_add(1, Ordering::Relaxed) + 1,
+            "active": summary.count,
+            "downloaded": summary.downloaded,
+            "total": summary.total,
+        })
+        .to_string();
+        if let Err(error) = hook(&event) {
+            eprintln!("Android WebView event warning: {error}");
+        }
     }
 }
 
@@ -6513,6 +6554,7 @@ fn app_state_job(filename: &str, job: &DownloadJob) -> serde_json::Value {
         "quality": job.quality_label,
         "height": job.quality_height,
         "source": job.source_url,
+        "error": job.error,
     })
 }
 
@@ -7398,7 +7440,7 @@ mod tests {
 
     #[test]
     fn changelog_covers_every_version_and_marks_the_current_release() {
-        assert_eq!(CHANGELOG.len(), 30);
+        assert_eq!(CHANGELOG.len(), 31);
         for (index, (version, changes)) in CHANGELOG.iter().rev().enumerate() {
             assert_eq!(*version, format!("0.1.{index}"));
             assert!(!changes.is_empty());
@@ -7420,7 +7462,7 @@ mod tests {
         assert!(html.contains(r#"id="version-go""#));
         assert!(html.contains("scrollIntoView"));
         assert!(html.contains("history.replaceState"));
-        assert_eq!(html.matches(r#"class="release-actions""#).count(), 28);
+        assert_eq!(html.matches(r#"class="release-actions""#).count(), 29);
         assert!(html.contains("Go to Settings"));
         assert!(html.contains("Go to Diagnostics"));
         assert!(!html.contains(r#"href="/control"#));

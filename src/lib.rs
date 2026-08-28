@@ -97,6 +97,9 @@ pub extern "system" fn Java_app_rustdl_MainActivity_nativeStartServer<'local>(
         let _ = ANDROID_BRIDGE.set(bridge);
         app::set_publish_hook(publish_to_android_downloads);
         app::set_transfer_hook(update_android_transfer);
+        if inspection_mode == 0 {
+            app::set_event_hook(dispatch_android_event);
+        }
         app::set_mux_hook(mux_android_tracks);
         app::set_extract_audio_hook(extract_android_audio);
         app::set_thumbnail_hook(generate_android_thumbnail);
@@ -116,6 +119,26 @@ pub extern "system" fn Java_app_rustdl_MainActivity_nativeStartServer<'local>(
     if let Err(error) = result {
         let _ = env.throw_new("java/lang/IllegalStateException", error);
     }
+}
+
+fn dispatch_android_event(event: &str) -> Result<(), String> {
+    let bridge = ANDROID_BRIDGE
+        .get()
+        .ok_or_else(|| "Android bridge is not initialized".to_owned())?;
+    let mut env = bridge
+        .vm
+        .attach_current_thread()
+        .map_err(|error| error.to_string())?;
+    let event = env.new_string(event).map_err(|error| error.to_string())?;
+    let event_object = JObject::from(event);
+    env.call_method(
+        bridge.activity.as_obj(),
+        "dispatchRustEvent",
+        "(Ljava/lang/String;)V",
+        &[JValue::Object(&event_object)],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 fn generate_android_thumbnail(source: &Path, filename: &str) -> Result<bool, String> {
