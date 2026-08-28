@@ -92,6 +92,8 @@ public class MainActivity extends Activity {
     private SettingsBridge settingsBridge;
     private ActivityBridge activityBridge;
     private boolean playbackActive;
+    private int playbackWidth = 16;
+    private int playbackHeight = 9;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private PowerManager powerManager;
@@ -361,9 +363,11 @@ public class MainActivity extends Activity {
             }
             int safeWidth = Math.max(1, width);
             int safeHeight = Math.max(1, height);
+            playbackWidth = safeWidth;
+            playbackHeight = safeHeight;
             try {
                 PictureInPictureParams params = new PictureInPictureParams.Builder()
-                        .setAspectRatio(new Rational(safeWidth, safeHeight))
+                        .setAspectRatio(new Rational(playbackWidth, playbackHeight))
                         .build();
                 enterPictureInPictureMode(params);
             } catch (IllegalArgumentException | IllegalStateException ignored) {
@@ -387,14 +391,20 @@ public class MainActivity extends Activity {
         });
     }
 
-    void setPlaybackActive(boolean active) {
+    void setPlaybackActive(boolean active, int width, int height) {
         handler.post(() -> {
             playbackActive = active;
+            if (width > 0 && height > 0) {
+                playbackWidth = width;
+                playbackHeight = height;
+            }
             applyPlaybackScreenPreferenceNow();
             if (android.os.Build.VERSION.SDK_INT >= 31 && supportsPictureInPicture()) {
                 try {
                     PictureInPictureParams params = new PictureInPictureParams.Builder()
+                            .setAspectRatio(new Rational(playbackWidth, playbackHeight))
                             .setAutoEnterEnabled(active)
+                            .setSeamlessResizeEnabled(true)
                             .build();
                     setPictureInPictureParams(params);
                 } catch (IllegalArgumentException | IllegalStateException ignored) {

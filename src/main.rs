@@ -130,6 +130,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .watch-progress { position: absolute; z-index: 3; inset: auto .7rem .6rem; height: 4px; overflow: hidden; border-radius: 999px; background: #ffffff42; }
     .watch-progress i { display: block; height: 100%; border-radius: inherit; background: #70dfc9; }
     .media-card-shell { position: relative; min-width: 0; }
+    .media-card-shell, .gallery > .media-card { content-visibility: auto; contain-intrinsic-size: auto 17rem; }
     .media-card-shell > .media-card { display: block; height: 100%; }
     .card-menu-button {
       position: absolute; z-index: 5; top: .55rem; right: .55rem; width: 2.35rem; height: 2.35rem;
@@ -332,12 +333,31 @@ const PLAYER_CSS: &str = r#"
       ::view-transition-group(*), ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .01ms; }
     }
     body.pip { padding: 0; background: #000; }
-    body.pip::before, body.pip .topline, body.pip header, body.pip .player-toolbar, body.pip .meta-card { display: none; }
+    body.pip::before, body.pip .topline, body.pip header, body.pip .player-toolbar, body.pip .meta-card, body.pip .mini-library, body.pip .mini-player-footer { display: none; }
     body.pip .player-shell, body.pip .player-frame { width: 100vw; height: 100vh; max-width: none; margin: 0; padding: 0; border: 0; border-radius: 0; background: #000; box-shadow: none; }
     body.pip video { width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0; }
+    body.pip .mini-player-dock { position: fixed; z-index: 100; inset: 0; width: 100vw; max-width: none; border: 0; border-radius: 0; background: #000; box-shadow: none; }
+    body.mini-player-mode { padding: 0; overflow: hidden; background: #090a0f; }
+    body.mini-player-mode::before, body.mini-player-mode > .player-shell { display: none; }
+    .mini-library { position: fixed; z-index: 20; inset: 0; width: 100%; height: 100%; border: 0; background: #090a0f; }
+    .mini-player-dock {
+      position: fixed; z-index: 30; right: max(.55rem, env(safe-area-inset-right)); bottom: max(.55rem, env(safe-area-inset-bottom));
+      width: min(23rem, calc(100vw - 1.1rem)); overflow: hidden; border: 1px solid #ffffff2b; border-radius: 18px;
+      background: #090b10; box-shadow: 0 18px 58px #000d; animation: mini-player-in .18s ease-out;
+    }
+    .mini-player-dock .player-frame { width: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; background: #000; box-shadow: none; }
+    .mini-player-dock .player-toolbar, .mini-player-dock .control-island, .mini-player-dock .download-label, .mini-player-dock .control-popover, .mini-player-dock .seek-toast { display: none; }
+    .mini-player-dock video { display: block; width: 100%; max-height: 34vh; aspect-ratio: 16/9; border: 0; border-radius: 0; object-fit: contain; background: #000; }
+    .mini-player-dock audio { display: block; width: calc(100% - 1rem); margin: .5rem; }
+    .mini-player-footer { display: grid; grid-template-columns: minmax(0,1fr) repeat(4,2.35rem); align-items: center; gap: .35rem; padding: .48rem; }
+    .mini-player-title { min-width: 0; overflow: hidden; padding: 0 .3rem; color: #e7ebf2; font: 750 .7rem/1.2 system-ui; text-overflow: ellipsis; white-space: nowrap; }
+    .mini-player-footer button { display: grid; place-items: center; width: 2.35rem; height: 2.35rem; padding: 0; border: 0; border-radius: 10px; color: #eef1f6; background: #ffffff0b; font: 800 .8rem/1 system-ui; }
+    .mini-player-footer button:hover { color: #07110f; background: #70dfc9; }
+    @keyframes mini-player-in { from { opacity: 0; transform: translateY(12px) scale(.97); } }
+    @media (prefers-reduced-motion: reduce) { .mini-player-dock { animation: none; } }
     .control-island {
       position: relative; z-index: 8; display: grid; margin-top: .55rem;
-      grid-template-columns: auto auto minmax(5rem,1fr) repeat(5,auto); align-items: center; gap: .5rem;
+      grid-template-columns: auto auto minmax(5rem,1fr) repeat(6,auto); align-items: center; gap: .5rem;
       padding: .62rem; border: 1px solid #ffffff2b; border-radius: 16px; color: #fff;
       background: linear-gradient(180deg,#111621,#090c12); box-shadow: inset 0 1px #ffffff0c;
       transition: opacity .2s ease, transform .2s ease;
@@ -392,7 +412,7 @@ const PLAYER_CSS: &str = r#"
     .player-frame:fullscreen .download-label { position: absolute; z-index: 4; right: .5rem; bottom: 3.85rem; margin: 0; color: #d5dae4; text-shadow: 0 2px 5px #000; }
     body.pip .control-island, body.pip .download-label { display: none; }
     @media (max-width: 700px) {
-      .control-island { grid-template-columns: auto minmax(4rem,1fr) repeat(3,auto); gap: .35rem; padding: .45rem; }
+      .control-island { grid-template-columns: auto minmax(4rem,1fr) repeat(4,auto); gap: .35rem; padding: .45rem; }
       .player-frame:fullscreen .control-island { left: .55rem; right: .55rem; bottom: .55rem; }
       .control-time, [data-control-mute], [data-control-pip] { display: none; }
       .control-button { min-width: 2.25rem; height: 2.25rem; }
@@ -567,7 +587,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
 
     const island=document.createElement('div');
     island.className='control-island';island.setAttribute('role','group');island.setAttribute('aria-label',audioOnly?'Audio controls':'Video controls');
-    island.innerHTML='<button class="control-button" type="button" data-control-play aria-label="Play">▶</button><span class="control-time" data-control-time>0:00 / 0:00</span><div class="timeline-shell"><span class="timeline-track"></span><span class="timeline-downloaded"></span><span class="timeline-played"></span><span class="download-boundary"></span><span class="scrub-anchor"></span><span class="scrub-preview"><img alt=""><video muted playsinline preload="metadata" aria-hidden="true"></video><output>0:00</output></span><input class="timeline-input" type="range" min="0" max="1000" value="0" aria-label="Seek video"></div><button class="control-button" type="button" data-control-mute aria-label="Mute">Vol</button><button class="control-button" type="button" data-control-speed aria-label="Playback speed">1×</button><button class="control-button" type="button" data-control-pip aria-label="Picture in picture">PiP</button><button class="control-button" type="button" data-control-more aria-label="More playback controls">•••</button><button class="control-button" type="button" data-control-fullscreen aria-label="Fullscreen">⛶</button>';
+    island.innerHTML='<button class="control-button" type="button" data-control-play aria-label="Play">▶</button><span class="control-time" data-control-time>0:00 / 0:00</span><div class="timeline-shell"><span class="timeline-track"></span><span class="timeline-downloaded"></span><span class="timeline-played"></span><span class="download-boundary"></span><span class="scrub-anchor"></span><span class="scrub-preview"><img alt=""><video muted playsinline preload="metadata" aria-hidden="true"></video><output>0:00</output></span><input class="timeline-input" type="range" min="0" max="1000" value="0" aria-label="Seek video"></div><button class="control-button" type="button" data-control-mute aria-label="Mute">Vol</button><button class="control-button" type="button" data-control-speed aria-label="Playback speed">1×</button><button class="control-button" type="button" data-control-mini aria-label="Browse with mini-player">▦</button><button class="control-button" type="button" data-control-pip aria-label="Picture in picture">PiP</button><button class="control-button" type="button" data-control-more aria-label="More playback controls">•••</button><button class="control-button" type="button" data-control-fullscreen aria-label="Fullscreen">⛶</button>';
     const downloadLabel=document.createElement('span');downloadLabel.className='download-label';downloadLabel.textContent='Saved locally';
     const speedMenu=document.createElement('div');speedMenu.id='speed-popover';speedMenu.className='control-popover';speedMenu.setAttribute('popover','auto');
     speedMenu.innerHTML='<h3>Playback speed</h3><div class="control-popover-grid"></div>';
@@ -593,6 +613,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     let previewSequence=0;
     const mute=island.querySelector('[data-control-mute]');
     const speed=island.querySelector('[data-control-speed]');
+    const mini=island.querySelector('[data-control-mini]');
     const pip=island.querySelector('[data-control-pip]');
     const more=island.querySelector('[data-control-more]');
     const fullscreen=island.querySelector('[data-control-fullscreen]');
@@ -707,10 +728,48 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     const browserPip=document.pictureInPictureEnabled&&video.requestPictureInPicture;
     pip.hidden=audioOnly;pip.disabled=audioOnly||(!nativePip&&!browserPip);
     rotation.hidden=audioOnly;
-    pip.addEventListener('click',()=>{
+    const enterPip=()=>{
       if(nativePip)bridge.enterPictureInPicture(video.videoWidth||16,video.videoHeight||9);
       else if(browserPip)video.requestPictureInPicture().catch(()=>{});
-    });
+    };
+    pip.addEventListener('click',enterPip);
+
+    const frameParent=frame.parentNode;
+    const frameNext=frame.nextSibling;
+    const frameTransitionName=frame.style.viewTransitionName;
+    let miniState=null;
+    const syncMiniPlay=()=>{if(miniState)miniState.play.textContent=video.paused?'▶':'❚❚'};
+    const exitMini=()=>{
+      if(!miniState)return;
+      if(frameNext&&frameNext.parentNode===frameParent)frameParent.insertBefore(frame,frameNext);else frameParent.append(frame);
+      miniState.browser.remove();miniState.dock.remove();miniState=null;
+      document.body.classList.remove('mini-player-mode');frame.style.viewTransitionName=frameTransitionName;
+    };
+    const wireMiniBrowser=browser=>{
+      let doc;try{doc=browser.contentDocument}catch(_error){return}if(!doc)return;
+      doc.addEventListener('click',event=>{
+        const link=event.target&&typeof event.target.closest==='function'?event.target.closest('a[href]'):null;if(!link)return;
+        let target;try{target=new URL(link.href,location.href)}catch(_error){return}
+        if(target.origin===location.origin&&target.pathname.startsWith('/watch/')){event.preventDefault();location.href=target.href}
+      },true);
+    };
+    const enterMini=()=>{
+      if(miniState)return;
+      const browser=document.createElement('iframe');browser.className='mini-library';browser.title='RustDL gallery';browser.addEventListener('load',()=>wireMiniBrowser(browser));browser.src='/';
+      const dock=document.createElement('aside');dock.className='mini-player-dock';dock.setAttribute('aria-label','Now playing');
+      const footer=document.createElement('div');footer.className='mini-player-footer';
+      const title=document.createElement('span');title.className='mini-player-title';title.textContent=filename;
+      const miniPlay=document.createElement('button');miniPlay.type='button';miniPlay.setAttribute('aria-label','Play or pause');
+      const miniPip=document.createElement('button');miniPip.type='button';miniPip.textContent='PiP';miniPip.setAttribute('aria-label','Picture in picture');miniPip.hidden=audioOnly||(!nativePip&&!browserPip);
+      const expand=document.createElement('button');expand.type='button';expand.textContent='↗';expand.setAttribute('aria-label','Return to full player');
+      const close=document.createElement('button');close.type='button';close.textContent='×';close.setAttribute('aria-label','Close player');
+      footer.append(title,miniPlay,miniPip,expand,close);dock.append(frame,footer);document.body.append(browser,dock);
+      miniState={browser,dock,play:miniPlay};document.body.classList.add('mini-player-mode');frame.style.viewTransitionName='none';syncMiniPlay();
+      miniPlay.addEventListener('click',togglePlayback);miniPip.addEventListener('click',enterPip);expand.addEventListener('click',exitMini);
+      close.addEventListener('click',()=>{video.pause();savePosition(filename,video.currentTime,video.duration);location.href='/'});
+    };
+    mini.addEventListener('click',enterMini);
+    document.querySelectorAll('.action[href="/"]').forEach(link=>link.addEventListener('click',event=>{event.preventDefault();enterMini()}));
     fullscreen.addEventListener('click',()=>{
       if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
       else if(frame.requestFullscreen)frame.requestFullscreen().catch(()=>video.requestFullscreen?.().catch(()=>{}));
@@ -730,9 +789,10 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       if(Date.now()-lastSaved>=2000){lastSaved=Date.now();savePosition(filename,video.currentTime,video.duration)}
       if('mediaSession' in navigator&&finite(video.duration)&&video.duration>0)try{navigator.mediaSession.setPositionState({duration:video.duration,playbackRate:video.playbackRate,position:clamp(video.currentTime,0,video.duration)})}catch(_error){}
     });
-    video.addEventListener('pause',()=>{updateControls();revealControls();savePosition(filename,video.currentTime,video.duration);if(bridge)bridge.setPlaying(false);if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused'});
-    video.addEventListener('play',()=>{updateControls();revealControls();if(bridge)bridge.setPlaying(!audioOnly);if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing'});
-    video.addEventListener('ended',()=>{if(bridge){bridge.markWatched(filename);bridge.setPlaying(false)}else{clearPosition(filename);localStorage.setItem('rustdl:watched:'+filename,'1')}});
+    const setNativePlaying=playing=>{if(bridge)bridge.setPlaybackState(playing&&!audioOnly,video.videoWidth||16,video.videoHeight||9)};
+    video.addEventListener('pause',()=>{updateControls();syncMiniPlay();revealControls();savePosition(filename,video.currentTime,video.duration);setNativePlaying(false);if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused'});
+    video.addEventListener('play',()=>{updateControls();syncMiniPlay();revealControls();setNativePlaying(true);if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing'});
+    video.addEventListener('ended',()=>{if(bridge){bridge.markWatched(filename);setNativePlaying(false)}else{clearPosition(filename);localStorage.setItem('rustdl:watched:'+filename,'1')}});
     video.addEventListener('dblclick',event=>seekBy(event.offsetX<video.clientWidth/2?-10:10));
     addEventListener('keydown',event=>{
       if(event.target instanceof HTMLInputElement||event.target instanceof HTMLButtonElement)return;
@@ -767,7 +827,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       const handlers={play:()=>video.play(),pause:()=>video.pause(),stop:()=>{video.pause();video.currentTime=0},seekbackward:event=>seekBy(-(event.seekOffset||10)),seekforward:event=>seekBy(event.seekOffset||10),seekto:event=>{if(finite(event.seekTime))seekSafely(event.seekTime)},previoustrack:()=>{video.currentTime=0}};
       Object.entries(handlers).forEach(([action,handler])=>{try{navigator.mediaSession.setActionHandler(action,handler)}catch(_error){}});
     }
-    addEventListener('pagehide',()=>{clearTimeout(sleepTimer);savePosition(filename,video.currentTime,video.duration);if(bridge){bridge.setPlaying(false);bridge.setRotationLocked(false)}});
+    addEventListener('pagehide',()=>{clearTimeout(sleepTimer);savePosition(filename,video.currentTime,video.duration);if(bridge){setNativePlaying(false);bridge.setRotationLocked(false)}});
     updateControls();revealControls();
     return;
   }
@@ -791,7 +851,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     for(const item of items){
       const card=document.createElement('a');card.className='media-card';card.href='/watch/'+encodeURIComponent(item.filename);
       const thumb=document.createElement('div');thumb.className='media-thumb';thumb.dataset.viewTransitionName='video-'+item.filename.replace(/\.(?:mp4|m4a)$/,'').replace(/[^A-Za-z0-9-]/g,'-');
-      if(item.filename.endsWith('.m4a'))card.classList.add('audio');else{const image=document.createElement('img');image.className='media-art';image.src='/thumbnail/'+encodeURIComponent(item.filename)+'.jpg';image.alt='';thumb.append(image)}
+      if(item.filename.endsWith('.m4a'))card.classList.add('audio');else{const image=document.createElement('img');image.className='media-art';image.loading='lazy';image.decoding='async';image.src='/thumbnail/'+encodeURIComponent(item.filename)+'.jpg';image.alt='';thumb.append(image)}
       const progress=document.createElement('span');progress.className='watch-progress';const bar=document.createElement('i');bar.style.width=Math.min(100,item.position/item.duration*100)+'%';progress.append(bar);thumb.append(progress);card.append(thumb);
       const info=document.createElement('div');info.className='media-info';const state=document.createElement('span');state.className='media-state';state.textContent='Resume';const name=document.createElement('span');name.className='media-title';name.textContent=item.filename;info.append(state,name);card.append(info);cards.append(card);
     }
@@ -818,9 +878,15 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
 
   const galleryTools=document.querySelector('.gallery-tools'),galleryItems=document.getElementById('gallery-items');
   if(galleryTools&&galleryItems){
-    const search=galleryTools.querySelector('.gallery-search'),buttons=[...galleryTools.querySelectorAll('[data-gallery-filter]')],status=galleryTools.querySelector('.gallery-filter-status'),empty=document.getElementById('gallery-empty');let filter='all';
-    const syncGalleryFilter=()=>{const query=search.value.trim().toLocaleLowerCase();let visible=0,total=0;for(const node of [...galleryItems.children]){if(node===empty)continue;const card=node.matches('.media-card')?node:node.querySelector('.media-card');if(!card)continue;total++;const folder=card.classList.contains('collection-folder'),audio=card.classList.contains('audio'),downloading=card.classList.contains('downloading'),kindMatches=filter==='all'||filter==='playlists'&&folder||filter==='audio'&&audio||filter==='video'&&!folder&&!audio||filter==='downloading'&&downloading;const show=(!query||card.textContent.toLocaleLowerCase().includes(query))&&kindMatches;node.hidden=!show;if(show)visible++}empty.hidden=visible!==0;status.textContent=visible+' of '+total+' shown'};
-    search.addEventListener('input',syncGalleryFilter);buttons.forEach(button=>button.addEventListener('click',()=>{filter=button.dataset.galleryFilter;buttons.forEach(item=>item.setAttribute('aria-pressed',String(item===button)));syncGalleryFilter()}));syncGalleryFilter();
+    const search=galleryTools.querySelector('.gallery-search'),buttons=[...galleryTools.querySelectorAll('[data-gallery-filter]')],status=galleryTools.querySelector('.gallery-filter-status'),empty=document.getElementById('gallery-empty');
+    const stateKey='rustdl:gallery:'+location.pathname;let savedState=safeParse(sessionStorage.getItem(stateKey))||{};
+    const restoreY=Number(savedState.scrollY)||0;let filter=buttons.some(button=>button.dataset.galleryFilter===savedState.filter)?savedState.filter:'all';search.value=typeof savedState.query==='string'?savedState.query:'';
+    const entries=[...galleryItems.children].filter(node=>node!==empty).map(node=>{const card=node.matches('.media-card')?node:node.querySelector('.media-card');return card?{node,card,text:card.textContent.toLocaleLowerCase()}:null}).filter(Boolean);
+    const persistGalleryState=()=>{savedState={query:search.value,filter,scrollY:scrollY};sessionStorage.setItem(stateKey,JSON.stringify(savedState))};
+    const syncGalleryFilter=()=>{const query=search.value.trim().toLocaleLowerCase();let visible=0;for(const entry of entries){const folder=entry.card.classList.contains('collection-folder'),audio=entry.card.classList.contains('audio'),downloading=entry.card.classList.contains('downloading'),kindMatches=filter==='all'||filter==='playlists'&&folder||filter==='audio'&&audio||filter==='video'&&!folder&&!audio||filter==='downloading'&&downloading;const show=(!query||entry.text.includes(query))&&kindMatches;entry.node.hidden=!show;if(show)visible++}empty.hidden=visible!==0;status.textContent=visible+' of '+entries.length+' shown';buttons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.galleryFilter===filter)));persistGalleryState()};
+    let filterFrame=0;const scheduleGalleryFilter=()=>{if(filterFrame)return;filterFrame=requestAnimationFrame(()=>{filterFrame=0;syncGalleryFilter()})};
+    search.addEventListener('input',scheduleGalleryFilter);buttons.forEach(button=>button.addEventListener('click',()=>{filter=button.dataset.galleryFilter;syncGalleryFilter()}));
+    addEventListener('pagehide',persistGalleryState);syncGalleryFilter();if(restoreY>0)requestAnimationFrame(()=>requestAnimationFrame(()=>scrollTo({top:restoreY,behavior:'auto'})));
   }
 
   const updateQuickActions=state=>{
@@ -2918,6 +2984,15 @@ fn respond_peer_status(request: Request, status: PeerStatus) -> Result<(), Box<d
 
 const CHANGELOG: &[(&str, &[&str])] = &[
     (
+        "0.1.34",
+        &[
+            "Added a persistent mini-player that keeps the current media alive while browsing the gallery and app pages.",
+            "Added compact play, Picture-in-Picture, expand, and close actions without covering the video.",
+            "Upgraded Android Picture-in-Picture with the real video aspect ratio, automatic entry while playing, and seamless resizing.",
+            "Made large galleries lighter to render and preserved search, filters, and scroll position across navigation.",
+        ],
+    ),
+    (
         "0.1.33",
         &[
             "Added on-the-fly video-frame previews while dragging or tapping the seeker.",
@@ -3186,6 +3261,7 @@ const CHANGELOG: &[(&str, &[&str])] = &[
 
 fn changelog_destinations(version: &str) -> &'static [(&'static str, &'static str)] {
     match version {
+        "0.1.34" => &[("/#gallery-library", "Mini-player & Picture-in-Picture")],
         "0.1.33" => &[("/#gallery-library", "Seek previews")],
         "0.1.32" => &[("/#gallery-library", "Streaming player")],
         "0.1.31" => &[("/activity", "Activity Center")],
@@ -6824,7 +6900,7 @@ fn dev_reload_script() -> String {
 fn html_csp() -> Header {
     header(
         "Content-Security-Policy",
-        "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self'; media-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'",
+        "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self'; media-src 'self'; connect-src 'self'; frame-src 'self'; form-action 'self'; base-uri 'none'",
     )
 }
 
@@ -7547,6 +7623,10 @@ mod tests {
         assert!(PLAYBACK_SCRIPT.contains("enterPictureInPicture"));
         assert!(PLAYBACK_SCRIPT.contains("Continue watching"));
         assert!(PLAYER_CSS.contains("body.pip"));
+        assert!(PLAYBACK_SCRIPT.contains("mini-player-mode"));
+        assert!(PLAYBACK_SCRIPT.contains("wireMiniBrowser"));
+        assert!(PLAYBACK_SCRIPT.contains("setPlaybackState"));
+        assert!(PLAYER_CSS.contains(".mini-player-dock"));
     }
 
     #[test]
@@ -7572,7 +7652,7 @@ mod tests {
 
     #[test]
     fn changelog_covers_every_version_and_marks_the_current_release() {
-        assert_eq!(CHANGELOG.len(), 34);
+        assert_eq!(CHANGELOG.len(), 35);
         for (index, (version, changes)) in CHANGELOG.iter().rev().enumerate() {
             assert_eq!(*version, format!("0.1.{index}"));
             assert!(!changes.is_empty());
@@ -7594,7 +7674,7 @@ mod tests {
         assert!(html.contains(r#"id="version-go""#));
         assert!(html.contains("scrollIntoView"));
         assert!(html.contains("history.replaceState"));
-        assert_eq!(html.matches(r#"class="release-actions""#).count(), 32);
+        assert_eq!(html.matches(r#"class="release-actions""#).count(), 33);
         assert!(html.contains("Go to Settings"));
         assert!(html.contains("Go to Diagnostics"));
         assert!(!html.contains(r#"href="/control"#));
@@ -7776,7 +7856,10 @@ mod tests {
         assert!(PLAYBACK_SCRIPT.contains("filter==='playlists'&&folder"));
         assert!(PLAYBACK_SCRIPT.contains("filter==='audio'&&audio"));
         assert!(PLAYBACK_SCRIPT.contains("filter==='downloading'&&downloading"));
-        assert!(PLAYBACK_SCRIPT.contains("toLocaleLowerCase().includes(query)"));
+        assert!(PLAYBACK_SCRIPT.contains("text:card.textContent.toLocaleLowerCase()"));
+        assert!(PLAYBACK_SCRIPT.contains("entry.text.includes(query)"));
+        assert!(PLAYBACK_SCRIPT.contains("requestAnimationFrame"));
+        assert!(PLAYBACK_SCRIPT.contains("sessionStorage.setItem(stateKey"));
     }
 
     #[test]

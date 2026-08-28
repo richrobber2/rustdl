@@ -165,8 +165,8 @@ final class PlaybackBridge {
     }
 
     @JavascriptInterface
-    public void setPlaying(boolean playing) {
-        activity.setPlaybackActive(playing);
+    public void setPlaybackState(boolean playing, int width, int height) {
+        activity.setPlaybackActive(playing, width, height);
     }
 
     private static boolean valid(String filename) {
