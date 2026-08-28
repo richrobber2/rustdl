@@ -90,6 +90,7 @@ public class MainActivity extends Activity {
     private PlaybackBridge playbackBridge;
     private DiagnosticsBridge diagnosticsBridge;
     private SettingsBridge settingsBridge;
+    private ActivityBridge activityBridge;
     private boolean playbackActive;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
@@ -238,6 +239,8 @@ public class MainActivity extends Activity {
         if (!inspectionMode) {
             settingsBridge = new SettingsBridge(this);
             webView.addJavascriptInterface(settingsBridge, "RustDLSettings");
+            activityBridge = new ActivityBridge(this);
+            webView.addJavascriptInterface(activityBridge, "RustDLActivity");
             playbackBridge = new PlaybackBridge(this);
             webView.addJavascriptInterface(playbackBridge, "RustDLPlayback");
             diagnosticsBridge = new DiagnosticsBridge(this);
@@ -595,7 +598,9 @@ public class MainActivity extends Activity {
         try {
             JSONObject event = new JSONObject(eventJson);
             String type = event.optString("type", "");
-            if (!("queue".equals(type) || "sync".equals(type))
+            if (!("queue".equals(type) || "peer".equals(type)
+                    || "update".equals(type) || "activity".equals(type)
+                    || "sync".equals(type))
                     || event.optInt("version", -1) != 1) {
                 return;
             }
@@ -613,6 +618,18 @@ public class MainActivity extends Activity {
                             + "}catch(_error){}})();",
                     null);
         });
+    }
+
+    String activityCenterStatus() {
+        try {
+            JSONObject result = new JSONObject();
+            result.put("ok", true);
+            result.put("update", updateManager == null
+                    ? JSONObject.NULL : new JSONObject(updateManager.activityStatus()));
+            return result.toString();
+        } catch (Exception unavailable) {
+            return "{\"ok\":false,\"detail\":\"Native status unavailable\"}";
+        }
     }
 
     public void updateTransferNotification(int count, long downloaded, long total) {
@@ -777,6 +794,9 @@ public class MainActivity extends Activity {
         }
         if (settingsBridge != null) {
             webView.removeJavascriptInterface("RustDLSettings");
+        }
+        if (activityBridge != null) {
+            webView.removeJavascriptInterface("RustDLActivity");
         }
         webView.destroy();
         super.onDestroy();

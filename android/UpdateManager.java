@@ -62,7 +62,9 @@ final class UpdateManager {
     private final SharedPreferences preferences;
     private final BroadcastReceiver installReceiver;
 
-    private ReadyUpdate readyUpdate;
+    private volatile ReadyUpdate readyUpdate;
+    private volatile String activityState = "idle";
+    private volatile String activityDetail = "Automatic checks enabled";
     private LinearLayout updateBanner;
     private Button updateButton;
     private boolean waitingForInstallPermission;
@@ -72,6 +74,10 @@ final class UpdateManager {
         this.activity = activity;
         this.root = root;
         this.manifestUrl = manifestUrl == null ? "" : manifestUrl.trim();
+        if (!isHttps(this.manifestUrl)) {
+            activityState = "disabled";
+            activityDetail = "No update source configured";
+        }
         preferences = activity.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
         installReceiver = new BroadcastReceiver() {
             @Override
@@ -93,21 +99,25 @@ final class UpdateManager {
         }
         long now = System.currentTimeMillis();
         if (now - preferences.getLong(LAST_CHECK, 0L) < CHECK_INTERVAL_MS) {
+            setActivityState("idle", "Checked recently");
             return;
         }
         preferences.edit().putLong(LAST_CHECK, now).apply();
+        setActivityState("checking", "Checking for updates");
         executor.execute(() -> {
             try {
                 Release release = fetchRelease();
                 long installedVersion = installedPackage().getLongVersionCode();
                 if (release.versionCode <= installedVersion) {
+                    setActivityState("current", "RustDL is up to date");
                     return;
                 }
+                setActivityState("downloading", "Downloading RustDL " + release.versionName);
                 File apk = downloadRelease(release);
                 validateApk(apk, release);
                 mainHandler.post(() -> showReadyUpdate(new ReadyUpdate(release, apk)));
             } catch (Exception error) {
-                // Update checks are intentionally quiet. Normal app use must never be blocked.
+                setActivityState("error", "Update check could not finish");
             }
         });
     }
@@ -266,6 +276,7 @@ final class UpdateManager {
             return;
         }
         readyUpdate = update;
+        setActivityState("ready", "RustDL " + update.release.versionName + " is ready");
         if (updateBanner != null) {
             root.removeView(updateBanner);
         }
@@ -324,6 +335,7 @@ final class UpdateManager {
             return;
         }
         setButtonState(false, "Installing…");
+        setActivityState("installing", "Handing update to Android");
         executor.execute(() -> {
             try {
                 validateApk(update.apk, update.release);
@@ -331,6 +343,7 @@ final class UpdateManager {
             } catch (Exception error) {
                 mainHandler.post(() -> {
                     setButtonState(true, "Retry");
+                    setActivityState("error", "Update could not be installed");
                     Toast.makeText(activity, "Update could not be installed", Toast.LENGTH_LONG)
                             .show();
                 });
@@ -380,8 +393,11 @@ final class UpdateManager {
                 return;
             }
         }
-        if (status != PackageInstaller.STATUS_SUCCESS) {
+        if (status == PackageInstaller.STATUS_SUCCESS) {
+            setActivityState("installed", "Update installed");
+        } else {
             setButtonState(true, "Retry");
+            setActivityState("error", "Android did not install the update");
             Toast.makeText(activity, "Android did not install the update", Toast.LENGTH_LONG)
                     .show();
         }
@@ -480,6 +496,30 @@ final class UpdateManager {
             }
         }
         return true;
+    }
+
+    String activityStatus() {
+        try {
+            JSONObject status = new JSONObject();
+            status.put("state", activityState);
+            status.put("detail", activityDetail);
+            status.put("configured", isHttps(manifestUrl));
+            if (readyUpdate != null) {
+                status.put("version", readyUpdate.release.versionName);
+            }
+            return status.toString();
+        } catch (Exception unavailable) {
+            return "{\"state\":\"unavailable\",\"detail\":\"Update status unavailable\"}";
+        }
+    }
+
+    private void setActivityState(String state, String detail) {
+        activityState = state;
+        activityDetail = detail;
+        if (activity instanceof MainActivity) {
+            ((MainActivity) activity).dispatchRustEvent(
+                    "{\"type\":\"update\",\"version\":1}");
+        }
     }
 
     private void setButtonState(boolean enabled, String text) {

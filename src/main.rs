@@ -1,3 +1,7 @@
+mod activity;
+mod activity_state;
+#[cfg(test)]
+mod activity_tests;
 mod live_events;
 #[cfg(test)]
 mod live_events_tests;
@@ -89,6 +93,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .fine-print { margin-top: 1.1rem; font-size: .8rem; color: #747a8a; }
     .tool-links { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
     .queue-link { color: #8fe3d2; font-size: .82rem; font-weight: 800; text-decoration: none; }
+    .activity-count { display: inline-grid; place-items: center; min-width: 1.25rem; height: 1.25rem; margin-left: .25rem; padding: 0 .3rem; border-radius: 999px; color: #07110f; background: #70dfc9; font-size: .64rem; }
     .library { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #ffffff18; }
     .library-head { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
     .library h2 { margin: 0; font-size: 1.08rem; }
@@ -186,7 +191,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <button type="submit">Find videos</button>
       </div>
     </form>
-    <div class="tool-links"><a class="queue-link" href="/queue">Download queue →</a><a class="queue-link" href="/storage">Storage manager →</a><a class="queue-link" href="/peers">Device transfer →</a><a class="queue-link" href="/diagnostics">Diagnostics →</a><a class="queue-link" href="/settings">Settings →</a><a class="queue-link" href="/changelog">What’s new →</a></div>
+    <div class="tool-links"><a class="queue-link" id="activity-link" href="/activity">Activity <span class="activity-count" id="activity-count" hidden></span> →</a><a class="queue-link" href="/queue">Download queue →</a><a class="queue-link" href="/storage">Storage manager →</a><a class="queue-link" href="/peers">Device transfer →</a><a class="queue-link" href="/diagnostics">Diagnostics →</a><a class="queue-link" href="/settings">Settings →</a><a class="queue-link" href="/changelog">What’s new →</a></div>
     <p class="fine-print">Public posts only. Download media you have permission to save.</p>
     <!--SAVED_VIDEOS-->
   </main>
@@ -713,7 +718,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       if(downloadStatePending)return;downloadStatePending=true;
       fetchState(filename).then(state=>{if(state)updateDownloadState(state)}).finally(()=>downloadStatePending=false);
     };
-    addEventListener('rustdl:state',event=>{if(['queue','sync'].includes(event.detail?.type))refreshDownloadState()});
+    addEventListener('rustdl:state',event=>{if(['queue','peer','activity','sync'].includes(event.detail?.type))refreshDownloadState()});
     refreshDownloadState();setInterval(()=>{if(!document.hidden)refreshDownloadState()},15000);
 
     if('mediaSession' in navigator&&'MediaMetadata' in window){
@@ -789,6 +794,9 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       nav.insertBefore(source,nav.lastElementChild);nav.insertBefore(quality,nav.lastElementChild);
     });
   };
+  const updateActivityBadge=state=>{
+    const badge=document.querySelector('#activity-count');if(!badge)return;const count=Number(state.activityActive||0)+Number(state.activityIssues||0);badge.hidden=count<=0;badge.textContent=String(count);
+  };
   const updateQueueMini=state=>{
     stateCache=state;const jobs=state.jobs||[];
     const job=jobs.find(item=>['downloading','starting','queued','paused'].includes(item.phase));
@@ -809,9 +817,9 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
   let stateRefreshPending=false;
   const refreshState=()=>{
     if(stateRefreshPending)return;stateRefreshPending=true;
-    fetchState().then(state=>{if(state){updateQuickActions(state);updateQueueMini(state)}}).finally(()=>stateRefreshPending=false);
+    fetchState().then(state=>{if(state){updateQuickActions(state);updateQueueMini(state);updateActivityBadge(state)}}).finally(()=>stateRefreshPending=false);
   };
-  addEventListener('rustdl:state',event=>{if(['queue','sync'].includes(event.detail?.type))refreshState()});
+  addEventListener('rustdl:state',event=>{if(['queue','peer','activity','sync'].includes(event.detail?.type))refreshState()});
   refreshState();setInterval(()=>{if(!document.hidden)refreshState()},15000);
 })();"#;
 
@@ -1593,6 +1601,7 @@ fn handle_request(
             },
         ),
         "/__dev/version" => respond_dev_version(request),
+        "/__app/activity.json" if !inspection_mode() => activity_state::respond_state(request),
         "/__app/state.json" => {
             let filename = parsed
                 .query_pairs()
@@ -1645,6 +1654,7 @@ fn handle_request(
             request.respond(response)?;
             Ok(())
         }
+        "/activity" if !inspection_mode() => activity_state::respond_page(request),
         "/diagnostics" if !inspection_mode() => respond_diagnostics_page(request),
         "/settings" if !inspection_mode() => respond_settings_page(request),
         "/changelog" => respond_changelog_page(request),
@@ -2017,6 +2027,10 @@ fn render_index_view(output_dir: &Path, selected_playlist: Option<&str>) -> io::
         .replace("<!--DEV_RELOAD-->", &dev_reload_script());
     if inspection_mode() {
         html = html.replace(
+            r#"<a class="queue-link" id="activity-link" href="/activity">Activity <span class="activity-count" id="activity-count" hidden></span> →</a>"#,
+            "",
+        );
+        html = html.replace(
             r#"<a class="queue-link" href="/peers">Device transfer →</a>"#,
             "",
         );
@@ -2344,6 +2358,7 @@ fn set_peer_send_job(filename: &str, job: PeerSendJob) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(filename.to_owned(), job);
+    notify_simple_event("peer");
 }
 
 fn update_peer_send_job(filename: &str, update: impl FnOnce(&mut PeerSendJob)) {
@@ -2355,6 +2370,7 @@ fn update_peer_send_job(filename: &str, update: impl FnOnce(&mut PeerSendJob)) {
     {
         update(job);
     }
+    notify_simple_event("peer");
 }
 
 fn enable_peer_pairing() -> Result<String, Box<dyn Error>> {
@@ -2862,6 +2878,14 @@ fn respond_peer_status(request: Request, status: PeerStatus) -> Result<(), Box<d
 
 const CHANGELOG: &[(&str, &[&str])] = &[
     (
+        "0.1.31",
+        &[
+            "Added a live Activity Center for downloads, device transfers, storage pressure, and app updates.",
+            "Added active and attention badges plus immediate typed events for transfer and updater state changes.",
+            "Added safe activity filters and direct actions without exposing peer addresses, thumbnails, or media contents.",
+        ],
+    ),
+    (
         "0.1.30",
         &[
             "Added a typed Rust-to-Java-to-WebView event bridge for immediate app-state updates.",
@@ -3106,6 +3130,7 @@ const CHANGELOG: &[(&str, &[&str])] = &[
 
 fn changelog_destinations(version: &str) -> &'static [(&'static str, &'static str)] {
     match version {
+        "0.1.31" => &[("/activity", "Activity Center")],
         "0.1.30" => &[("/queue", "Live queue"), ("/#gallery-library", "Gallery")],
         "0.1.29" => &[("/settings", "Settings")],
         "0.1.28" | "0.1.27" | "0.1.26" | "0.1.23" => &[("/diagnostics", "Diagnostics")],
@@ -5894,6 +5919,20 @@ fn notify_transfer_state(force: bool) {
     }
 }
 
+fn notify_simple_event(kind: &str) {
+    if let Some(hook) = EVENT_HOOK.get() {
+        let event = serde_json::json!({
+            "type": kind,
+            "version": 1,
+            "revision": EVENT_REVISION.fetch_add(1, Ordering::Relaxed) + 1,
+        })
+        .to_string();
+        if let Err(error) = hook(&event) {
+            eprintln!("Android WebView event warning: {error}");
+        }
+    }
+}
+
 fn mark_download_failed(filename: &str, error: String) {
     let previous = download_job(filename);
     let downloaded = QUEUE_OUTPUT_DIR
@@ -6567,6 +6606,8 @@ fn respond_app_state(
         serde_json::json!({
             "inspection": true,
             "active": 1,
+            "activityActive": 1,
+            "activityIssues": 0,
             "downloaded": 27_262_976_u64,
             "total": 67_108_864_u64,
             "jobs": [{
@@ -6634,9 +6675,12 @@ fn respond_app_state(
                             })
                     })
             });
+        let activity = activity_state::snapshot();
         serde_json::json!({
             "inspection": false,
             "active": active,
+            "activityActive": activity["counts"]["active"].clone(),
+            "activityIssues": activity["counts"]["issues"].clone(),
             "downloaded": downloaded,
             "total": total,
             "jobs": jobs
@@ -7440,7 +7484,7 @@ mod tests {
 
     #[test]
     fn changelog_covers_every_version_and_marks_the_current_release() {
-        assert_eq!(CHANGELOG.len(), 31);
+        assert_eq!(CHANGELOG.len(), 32);
         for (index, (version, changes)) in CHANGELOG.iter().rev().enumerate() {
             assert_eq!(*version, format!("0.1.{index}"));
             assert!(!changes.is_empty());
@@ -7462,7 +7506,7 @@ mod tests {
         assert!(html.contains(r#"id="version-go""#));
         assert!(html.contains("scrollIntoView"));
         assert!(html.contains("history.replaceState"));
-        assert_eq!(html.matches(r#"class="release-actions""#).count(), 29);
+        assert_eq!(html.matches(r#"class="release-actions""#).count(), 30);
         assert!(html.contains("Go to Settings"));
         assert!(html.contains("Go to Diagnostics"));
         assert!(!html.contains(r#"href="/control"#));
