@@ -24,7 +24,6 @@ import android.net.Uri;
 import android.os.BatteryManager;
 import android.os.Bundle;
 import android.os.Build;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -62,7 +61,6 @@ public class MainActivity extends Activity {
             "app.rustdl.action.CAPTURE_INSPECTION";
     private static final String INSPECTION_SCREEN = "app.rustdl.extra.SCREEN";
     private static final String INSPECTION_CAPTURE_NAME = "inspection-capture.png";
-    private static final String DOWNLOAD_PATH = Environment.DIRECTORY_DOWNLOADS + "/RustDL/";
     private static final Pattern SUPPORTED_URL = Pattern.compile(
             "https?://(?:(?:www|mobile|m)\\.)?(?:x\\.com|twitter\\.com|youtube\\.com|youtu\\.be|snapchat\\.com)/\\S+",
             Pattern.CASE_INSENSITIVE);
@@ -89,6 +87,7 @@ public class MainActivity extends Activity {
     private UpdateManager updateManager;
     private PlaybackBridge playbackBridge;
     private DiagnosticsBridge diagnosticsBridge;
+    private SettingsBridge settingsBridge;
     private boolean playbackActive;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
@@ -235,6 +234,8 @@ public class MainActivity extends Activity {
         settings.setBuiltInZoomControls(false);
         settings.setSupportZoom(false);
         if (!inspectionMode) {
+            settingsBridge = new SettingsBridge(this);
+            webView.addJavascriptInterface(settingsBridge, "RustDLSettings");
             playbackBridge = new PlaybackBridge(this);
             webView.addJavascriptInterface(playbackBridge, "RustDLPlayback");
             diagnosticsBridge = new DiagnosticsBridge(this);
@@ -381,6 +382,7 @@ public class MainActivity extends Activity {
     void setPlaybackActive(boolean active) {
         handler.post(() -> {
             playbackActive = active;
+            applyPlaybackScreenPreferenceNow();
             if (android.os.Build.VERSION.SDK_INT >= 31 && supportsPictureInPicture()) {
                 try {
                     PictureInPictureParams params = new PictureInPictureParams.Builder()
@@ -412,9 +414,8 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT));
         webView.setVisibility(View.GONE);
         progressBar.setVisibility(View.GONE);
-        getWindow().addFlags(
-                WindowManager.LayoutParams.FLAG_FULLSCREEN
-                        | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        applyPlaybackScreenPreferenceNow();
         applyFullscreenSystemUi();
     }
 
@@ -441,10 +442,25 @@ public class MainActivity extends Activity {
                 WindowManager.LayoutParams.FLAG_FULLSCREEN
                         | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().getDecorView().setSystemUiVisibility(previousSystemUiVisibility);
+        applyPlaybackScreenPreferenceNow();
 
         if (fullscreenCallback != null) {
             fullscreenCallback.onCustomViewHidden();
             fullscreenCallback = null;
+        }
+    }
+
+    void applyPlaybackScreenPreference() {
+        handler.post(this::applyPlaybackScreenPreferenceNow);
+    }
+
+    private void applyPlaybackScreenPreferenceNow() {
+        boolean keepAwake = playbackActive && settingsBridge != null
+                && settingsBridge.keepScreenAwake();
+        if (keepAwake) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         }
     }
 
@@ -603,8 +619,12 @@ public class MainActivity extends Activity {
         Uri downloads = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
         String selection = MediaStore.Downloads.DISPLAY_NAME + "=? AND "
                 + MediaStore.Downloads.RELATIVE_PATH + "=?";
-        resolver.delete(downloads, selection, new String[]{displayName, DOWNLOAD_PATH});
-        getPreferences(MODE_PRIVATE).edit().remove("published:" + displayName).apply();
+        resolver.delete(downloads, selection,
+                new String[]{displayName, publishedDownloadPath(displayName)});
+        getPreferences(MODE_PRIVATE).edit()
+                .remove("published:" + displayName)
+                .remove("published-path:" + displayName)
+                .apply();
         if (playbackBridge != null) playbackBridge.forget(displayName);
     }
 
@@ -624,7 +644,7 @@ public class MainActivity extends Activity {
                     downloads,
                     new String[]{MediaStore.Downloads._ID},
                     selection,
-                    new String[]{displayName, DOWNLOAD_PATH},
+                    new String[]{displayName, publishedDownloadPath(displayName)},
                     null)) {
                 if (cursor != null && cursor.moveToFirst()) {
                     media = Uri.withAppendedPath(downloads, Long.toString(cursor.getLong(0)));
@@ -724,6 +744,9 @@ public class MainActivity extends Activity {
         if (diagnosticsBridge != null) {
             webView.removeJavascriptInterface("RustDLDiagnostics");
         }
+        if (settingsBridge != null) {
+            webView.removeJavascriptInterface("RustDLSettings");
+        }
         webView.destroy();
         super.onDestroy();
     }
@@ -739,9 +762,11 @@ public class MainActivity extends Activity {
         }
         ContentResolver resolver = getContentResolver();
         Uri downloads = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+        String downloadPath = settingsBridge == null
+                ? SettingsBridge.DEFAULT_DOWNLOAD_PATH : settingsBridge.relativeDownloadPath();
         String selection = MediaStore.Downloads.DISPLAY_NAME + "=? AND "
                 + MediaStore.Downloads.RELATIVE_PATH + "=?";
-        String[] arguments = new String[]{displayName, DOWNLOAD_PATH};
+        String[] arguments = new String[]{displayName, downloadPath};
         try (Cursor cursor = resolver.query(
                 downloads,
                 new String[]{MediaStore.Downloads._ID},
@@ -749,7 +774,10 @@ public class MainActivity extends Activity {
                 arguments,
                 null)) {
             if (cursor != null && cursor.moveToFirst()) {
-                getPreferences(MODE_PRIVATE).edit().putBoolean(preferenceKey, true).apply();
+                getPreferences(MODE_PRIVATE).edit()
+                        .putBoolean(preferenceKey, true)
+                        .putString("published-path:" + displayName, downloadPath)
+                        .apply();
                 return true;
             }
         }
@@ -758,7 +786,7 @@ public class MainActivity extends Activity {
         values.put(MediaStore.Downloads.DISPLAY_NAME, displayName);
         boolean audioOnly = displayName.endsWith(".m4a");
         values.put(MediaStore.Downloads.MIME_TYPE, audioOnly ? "audio/mp4" : "video/mp4");
-        values.put(MediaStore.Downloads.RELATIVE_PATH, DOWNLOAD_PATH);
+        values.put(MediaStore.Downloads.RELATIVE_PATH, downloadPath);
         values.put(MediaStore.Downloads.IS_PENDING, 1);
         Uri destination = resolver.insert(downloads, values);
         if (destination == null) {
@@ -784,9 +812,17 @@ public class MainActivity extends Activity {
         ContentValues ready = new ContentValues();
         ready.put(MediaStore.Downloads.IS_PENDING, 0);
         resolver.update(destination, ready, null, null);
-        getPreferences(MODE_PRIVATE).edit().putBoolean(preferenceKey, true).apply();
+        getPreferences(MODE_PRIVATE).edit()
+                .putBoolean(preferenceKey, true)
+                .putString("published-path:" + displayName, downloadPath)
+                .apply();
         handler.post(this::reloadGalleryIfVisible);
         return false;
+    }
+
+    private String publishedDownloadPath(String displayName) {
+        return getPreferences(MODE_PRIVATE).getString(
+                "published-path:" + displayName, SettingsBridge.DEFAULT_DOWNLOAD_PATH);
     }
 
     public boolean ensureThumbnail(String sourcePath, String displayName) {

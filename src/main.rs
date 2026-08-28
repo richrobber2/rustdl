@@ -1,3 +1,7 @@
+mod settings;
+#[cfg(test)]
+mod settings_tests;
+
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, Payload},
@@ -176,7 +180,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <button type="submit">Find videos</button>
       </div>
     </form>
-    <div class="tool-links"><a class="queue-link" href="/queue">Download queue →</a><a class="queue-link" href="/storage">Storage manager →</a><a class="queue-link" href="/peers">Device transfer →</a><a class="queue-link" href="/diagnostics">Diagnostics →</a><a class="queue-link" href="/changelog">What’s new →</a></div>
+    <div class="tool-links"><a class="queue-link" href="/queue">Download queue →</a><a class="queue-link" href="/storage">Storage manager →</a><a class="queue-link" href="/peers">Device transfer →</a><a class="queue-link" href="/diagnostics">Diagnostics →</a><a class="queue-link" href="/settings">Settings →</a><a class="queue-link" href="/changelog">What’s new →</a></div>
     <p class="fine-print">Public posts only. Download media you have permission to save.</p>
     <!--SAVED_VIDEOS-->
   </main>
@@ -1618,6 +1622,7 @@ fn handle_request(
             Ok(())
         }
         "/diagnostics" if !inspection_mode() => respond_diagnostics_page(request),
+        "/settings" if !inspection_mode() => respond_settings_page(request),
         "/changelog" => respond_changelog_page(request),
         "/peers/refresh" if !inspection_mode() => {
             respond_peer_pairing_refresh(request, args_peer_port())
@@ -1989,6 +1994,10 @@ fn render_index_view(output_dir: &Path, selected_playlist: Option<&str>) -> io::
     if inspection_mode() {
         html = html.replace(
             r#"<a class="queue-link" href="/peers">Device transfer →</a>"#,
+            "",
+        );
+        html = html.replace(
+            r#"<a class="queue-link" href="/settings">Settings →</a>"#,
             "",
         );
         html = html.replace(" required autofocus", " required");
@@ -2829,6 +2838,14 @@ fn respond_peer_status(request: Request, status: PeerStatus) -> Result<(), Box<d
 
 const CHANGELOG: &[(&str, &[&str])] = &[
     (
+        "0.1.29",
+        &[
+            "Added a persistent Settings page backed entirely by the installed APK.",
+            "Added a safe custom Downloads subfolder for newly exported video and audio while preserving existing file locations.",
+            "Added playback screen-awake and Diagnostics refresh controls with one-tap default restore.",
+        ],
+    ),
+    (
         "0.1.28",
         &[
             "Rebuilt Diagnostics as a fail-soft dashboard where one unavailable Android source can no longer blank the entire page.",
@@ -3057,6 +3074,7 @@ const CHANGELOG: &[(&str, &[&str])] = &[
 
 fn changelog_destinations(version: &str) -> &'static [(&'static str, &'static str)] {
     match version {
+        "0.1.29" => &[("/settings", "Settings")],
         "0.1.28" | "0.1.27" | "0.1.26" | "0.1.23" => &[("/diagnostics", "Diagnostics")],
         "0.1.25" | "0.1.24" => &[("/changelog#version-jump", "version navigation")],
         "0.1.22" | "0.1.21" => &[],
@@ -3152,13 +3170,24 @@ fn render_diagnostics_page() -> String {
 <article class="wide"><header><h2>RustDL health</h2></header><div class="health"><div><strong>Android app process</strong><span id="app-pid">—</span></div><div><strong>Rust backend</strong><span>Bundled · local</span></div></div><p id="updated" class="sub" style="margin-top:.8rem">Waiting for first sample…</p></article>
 <article class="privacy"><strong>Privacy boundary:</strong> this APK-local snapshot contains system totals and RustDL’s process ID only. It excludes logs, notifications, media filenames, Wi-Fi identity, location, other apps, and screen content. Diagnostics are unavailable in inspection mode. RustDL {}</article>
 </section></main><script>
-(()=>{{const bridge=window.RustDLDiagnostics,$=selector=>document.querySelector(selector),refresh=$('#refresh'),copy=$('#copy'),grid=$('#diagnostics-grid');let latest=null,busy=false;const finite=value=>Number.isFinite(Number(value))?Number(value):-1,clamp=value=>Math.max(0,Math.min(100,value)),fixed=(value,digits)=>finite(value)>=0?finite(value).toFixed(digits):'—',bytes=value=>{{value=finite(value);if(value<0)return'Unavailable';const units=['B','KB','MB','GB','TB'];let index=0;while(value>=1024&&index<units.length-1){{value/=1024;index++}}return value.toFixed(index>2?1:0)+' '+units[index]}},duration=seconds=>{{seconds=finite(seconds);if(seconds<0)return'Unavailable';const days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600),minutes=Math.floor(seconds%3600/60);return days?days+'d '+hours+'h':hours?hours+'h '+minutes+'m':minutes+'m'}},thermalNames=['None','Light','Moderate','Severe','Critical','Emergency','Shutdown'],setBar=(id,value)=>$(id).style.width=clamp(value)+'%',setValue=(id,value,available)=>{{const element=$(id);element.textContent=value;element.classList.toggle('unavailable',!available)}};
+(()=>{{const bridge=window.RustDLDiagnostics,settings=window.RustDLSettings,$=selector=>document.querySelector(selector);let refreshSeconds=5;try{{if(settings)refreshSeconds=Number(settings.diagnosticsRefreshSeconds())||5}}catch(_error){{refreshSeconds=5}}const refresh=$('#refresh'),copy=$('#copy'),grid=$('#diagnostics-grid');let latest=null,busy=false;const finite=value=>Number.isFinite(Number(value))?Number(value):-1,clamp=value=>Math.max(0,Math.min(100,value)),fixed=(value,digits)=>finite(value)>=0?finite(value).toFixed(digits):'—',bytes=value=>{{value=finite(value);if(value<0)return'Unavailable';const units=['B','KB','MB','GB','TB'];let index=0;while(value>=1024&&index<units.length-1){{value/=1024;index++}}return value.toFixed(index>2?1:0)+' '+units[index]}},duration=seconds=>{{seconds=finite(seconds);if(seconds<0)return'Unavailable';const days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600),minutes=Math.floor(seconds%3600/60);return days?days+'d '+hours+'h':hours?hours+'h '+minutes+'m':minutes+'m'}},thermalNames=['None','Light','Moderate','Severe','Critical','Emergency','Shutdown'],setBar=(id,value)=>$(id).style.width=clamp(value)+'%',setValue=(id,value,available)=>{{const element=$(id);element.textContent=value;element.classList.toggle('unavailable',!available)}};
 const render=data=>{{latest=data;const batteryLevel=finite(data.batteryLevel),temperature=finite(data.batteryTemperatureC),thermalStatus=finite(data.thermalStatus),load1=finite(data.load1),load5=finite(data.load5),load15=finite(data.load15),processors=Math.max(1,finite(data.processors)),memoryTotal=finite(data.memoryTotalBytes),memoryAvailable=finite(data.memoryAvailableBytes),storageTotal=finite(data.storageTotalBytes),storageAvailable=finite(data.storageAvailableBytes),memoryUsed=memoryTotal>0&&memoryAvailable>=0?100*(1-memoryAvailable/memoryTotal):-1,storageUsed=storageTotal>0&&storageAvailable>=0?100*(1-storageAvailable/storageTotal):-1,cpuUsed=load1>=0?100*load1/processors:-1,thermalName=thermalStatus>=0?(thermalNames[thermalStatus]||'Status '+thermalStatus):'Status unavailable';setValue('#battery',batteryLevel>=0?batteryLevel+'%':'Unavailable',batteryLevel>=0);$('#battery-sub').textContent=(data.batteryStatus||'Unknown')+' · '+(temperature>=0?temperature.toFixed(1)+' °C':'temperature unavailable');setBar('#battery-bar',batteryLevel);setValue('#thermal',temperature>=0?temperature.toFixed(1)+' °C':thermalName,temperature>=0||thermalStatus>=0);$('#thermal-sub').textContent=(temperature>=0?'Battery sensor · ':'')+thermalName;setBar('#thermal-bar',temperature>=0?(temperature-20)/30*100:thermalStatus>=0?thermalStatus/6*100:0);setValue('#cpu',load1>=0?load1.toFixed(2):'Unavailable',load1>=0);$('#cpu-sub').textContent=load1>=0?fixed(load1,2)+' / '+fixed(load5,2)+' / '+fixed(load15,2)+' · '+processors+' cores':'Load average restricted by Android';setBar('#cpu-bar',cpuUsed);setValue('#memory',memoryAvailable>=0?bytes(memoryAvailable):'Unavailable',memoryAvailable>=0);$('#memory-sub').textContent=memoryUsed>=0?memoryUsed.toFixed(0)+'% used of '+bytes(memoryTotal):'Memory totals unavailable';setBar('#memory-bar',memoryUsed);setValue('#storage',storageAvailable>=0?bytes(storageAvailable):'Unavailable',storageAvailable>=0);$('#storage-sub').textContent=storageUsed>=0?storageUsed.toFixed(0)+'% used of '+bytes(storageTotal):'Storage totals unavailable';setBar('#storage-bar',storageUsed);setValue('#uptime',duration(data.uptimeSeconds),finite(data.uptimeSeconds)>=0);$('#app-pid').textContent=finite(data.rustdlPid)>0?'PID '+finite(data.rustdlPid):'Unavailable';$('#updated').textContent='Updated '+new Date(data.timestamp).toLocaleTimeString();copy.disabled=false;grid.setAttribute('aria-busy','false')}};
-const load=()=>{{if(busy)return;busy=true;refresh.disabled=true;grid.setAttribute('aria-busy','true');$('#live').textContent='Refreshing…';if(!bridge){{$('#live').textContent='Open inside the installed RustDL app';$('#live').classList.add('offline');grid.setAttribute('aria-busy','false');refresh.disabled=false;busy=false;return}}try{{const response=JSON.parse(bridge.diagnostics());if(!response.ok||!response.data)throw new Error(response.detail||'No diagnostics sample');render(response.data);$('#live').textContent=(response.detail||'Live')+' · updates every 5 seconds';$('#live').classList.remove('offline')}}catch(error){{$('#live').textContent='Could not read diagnostics · tap Refresh';$('#live').classList.add('offline');grid.setAttribute('aria-busy','false')}}finally{{refresh.disabled=false;busy=false}}}};refresh.addEventListener('click',load);copy.addEventListener('click',event=>{{if(!latest||!bridge)return;const copied=bridge.copySnapshot(JSON.stringify(latest,null,2));event.currentTarget.textContent=copied?'Copied':'Copy failed';setTimeout(()=>event.currentTarget.textContent='Copy snapshot',1000)}});document.addEventListener('visibilitychange',()=>{{if(!document.hidden)load()}});load();setInterval(()=>{{if(!document.hidden)load()}},5000)}})();
+const load=()=>{{if(busy)return;busy=true;refresh.disabled=true;grid.setAttribute('aria-busy','true');$('#live').textContent='Refreshing…';if(!bridge){{$('#live').textContent='Open inside the installed RustDL app';$('#live').classList.add('offline');grid.setAttribute('aria-busy','false');refresh.disabled=false;busy=false;return}}try{{const response=JSON.parse(bridge.diagnostics());if(!response.ok||!response.data)throw new Error(response.detail||'No diagnostics sample');render(response.data);$('#live').textContent=(response.detail||'Live')+' · updates every '+refreshSeconds+' seconds';$('#live').classList.remove('offline')}}catch(error){{$('#live').textContent='Could not read diagnostics · tap Refresh';$('#live').classList.add('offline');grid.setAttribute('aria-busy','false')}}finally{{refresh.disabled=false;busy=false}}}};refresh.addEventListener('click',load);copy.addEventListener('click',event=>{{if(!latest||!bridge)return;const copied=bridge.copySnapshot(JSON.stringify(latest,null,2));event.currentTarget.textContent=copied?'Copied':'Copy failed';setTimeout(()=>event.currentTarget.textContent='Copy snapshot',1000)}});document.addEventListener('visibilitychange',()=>{{if(!document.hidden)load()}});load();setInterval(()=>{{if(!document.hidden)load()}},refreshSeconds*1000)}})();
 </script>{}</body></html>"#,
         env!("CARGO_PKG_VERSION"),
         dev_reload_script()
     )
+}
+
+fn respond_settings_page(request: Request) -> Result<(), Box<dyn Error>> {
+    let response = Response::from_string(settings::render(&dev_reload_script()))
+        .with_status_code(StatusCode(200))
+        .with_header(header("Content-Type", "text/html; charset=utf-8"))
+        .with_header(html_csp())
+        .with_header(header("Cache-Control", "no-store"))
+        .with_header(header("X-Content-Type-Options", "nosniff"));
+    request.respond(response)?;
+    Ok(())
 }
 
 fn respond_diagnostics_page(request: Request) -> Result<(), Box<dyn Error>> {
@@ -7369,7 +7398,7 @@ mod tests {
 
     #[test]
     fn changelog_covers_every_version_and_marks_the_current_release() {
-        assert_eq!(CHANGELOG.len(), 29);
+        assert_eq!(CHANGELOG.len(), 30);
         for (index, (version, changes)) in CHANGELOG.iter().rev().enumerate() {
             assert_eq!(*version, format!("0.1.{index}"));
             assert!(!changes.is_empty());
@@ -7391,7 +7420,8 @@ mod tests {
         assert!(html.contains(r#"id="version-go""#));
         assert!(html.contains("scrollIntoView"));
         assert!(html.contains("history.replaceState"));
-        assert_eq!(html.matches(r#"class="release-actions""#).count(), 27);
+        assert_eq!(html.matches(r#"class="release-actions""#).count(), 28);
+        assert!(html.contains("Go to Settings"));
         assert!(html.contains("Go to Diagnostics"));
         assert!(!html.contains(r#"href="/control"#));
         assert!(html.contains(r#"href="/peers""#));
