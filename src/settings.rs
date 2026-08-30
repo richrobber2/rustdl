@@ -61,6 +61,15 @@ pub(crate) fn render(dev_reload: &str) -> String {
         <label class="switch"><input id="keep-awake" type="checkbox"><i aria-hidden="true"></i><span hidden>Keep screen awake</span></label>
       </section>
       <section class="card">
+        <label class="label" for="appearance">Appearance</label>
+        <select id="appearance"><option value="system">Follow system</option><option value="dark">Dark</option><option value="light">Light</option></select>
+        <p class="hint">The quick theme button on every page switches directly between light and dark.</p>
+      </section>
+      <section class="card switch-row">
+        <div class="switch-copy"><strong>Moving space background</strong><small>Uses layered transform-only star fields and stops automatically with reduced motion.</small></div>
+        <label class="switch"><input id="space-effect" type="checkbox"><i aria-hidden="true"></i><span hidden>Moving space background</span></label>
+      </section>
+      <section class="card">
         <label class="label" for="diagnostics-refresh">Diagnostics refresh rate</label>
         <select id="diagnostics-refresh"><option value="3">Every 3 seconds</option><option value="5">Every 5 seconds</option><option value="10">Every 10 seconds</option><option value="30">Every 30 seconds</option></select>
         <p class="hint">A slower interval uses slightly less battery while the Diagnostics page is open.</p>
@@ -76,6 +85,8 @@ pub(crate) fn render(dev_reload: &str) -> String {
       const folder = document.querySelector('#download-folder');
       const destination = document.querySelector('#destination');
       const keepAwake = document.querySelector('#keep-awake');
+      const appearance = document.querySelector('#appearance');
+      const spaceEffect = document.querySelector('#space-effect');
       const refresh = document.querySelector('#diagnostics-refresh');
       const save = document.querySelector('#save');
       const reset = document.querySelector('#reset');
@@ -86,22 +97,28 @@ pub(crate) fn render(dev_reload: &str) -> String {
         destination.textContent = result.downloadPath || `Downloads/${folder.value}`;
         keepAwake.checked = result.keepScreenAwake !== false;
         refresh.value = String(result.diagnosticsRefreshSeconds || 5);
+        appearance.value = result.appearance || 'system';
+        spaceEffect.checked = result.spaceEffectEnabled !== false;
+        window.RustDLTheme?.apply(appearance.value, spaceEffect.checked, false);
       };
       const call = method => {
         try { const result = JSON.parse(method()); show(result); setStatus(result.detail || '', !result.ok); return result.ok; }
         catch (_error) { setStatus('Could not communicate with Android settings', true); return false; }
       };
       folder.addEventListener('input', () => { destination.textContent = `Downloads/${folder.value.trim() || '…'}`; });
+      const previewAppearance = () => window.RustDLTheme?.apply(appearance.value, spaceEffect.checked, false);
+      appearance.addEventListener('change', previewAppearance);
+      spaceEffect.addEventListener('change', previewAppearance);
       form.addEventListener('submit', event => {
         event.preventDefault();
         if (!bridge) return;
         save.disabled = true;
-        call(() => bridge.save(folder.value, keepAwake.checked, Number(refresh.value)));
+        call(() => bridge.save(folder.value, keepAwake.checked, Number(refresh.value), appearance.value, spaceEffect.checked));
         save.disabled = false;
       });
       reset.addEventListener('click', () => { if (bridge) call(() => bridge.reset()); });
       if (bridge) call(() => bridge.settings());
-      else { save.disabled = reset.disabled = true; folder.value = 'RustDL'; keepAwake.checked = true; setStatus('Open Settings inside the installed RustDL app', true); }
+      else { save.disabled = reset.disabled = true; folder.value = 'RustDL'; keepAwake.checked = spaceEffect.checked = true; appearance.value = 'system'; setStatus('Browser appearance is controlled by the quick theme button', false); }
     })();
   </script>
   <!--DEV_RELOAD-->

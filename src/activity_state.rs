@@ -128,7 +128,7 @@ pub(crate) fn respond_state(request: Request) -> Result<(), Box<dyn Error>> {
 }
 
 pub(crate) fn respond_page(request: Request) -> Result<(), Box<dyn Error>> {
-    let response = Response::from_string(activity::render(&dev_reload_script()))
+    let response = Response::from_string(decorate_app_html(activity::render(&dev_reload_script())))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())

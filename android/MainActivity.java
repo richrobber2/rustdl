@@ -64,7 +64,7 @@ public class MainActivity extends Activity {
     private static final String INSPECTION_SCREEN = "app.rustdl.extra.SCREEN";
     private static final String INSPECTION_CAPTURE_NAME = "inspection-capture.png";
     private static final Pattern SUPPORTED_URL = Pattern.compile(
-            "https?://(?:(?:www|mobile|m)\\.)?(?:x\\.com|twitter\\.com|youtube\\.com|youtu\\.be|snapchat\\.com)/\\S+",
+            "https?://(?:(?:www|mobile|m)\\.)?(?:x\\.com|twitter\\.com|youtube\\.com|youtu\\.be|snapchat\\.com|aniwaves\\.ru)/\\S+",
             Pattern.CASE_INSENSITIVE);
     private static final String MEDIA_NAME_PATTERN =
             "(?:[0-9]+-[1-9][0-9]*|youtube-[A-Za-z0-9_-]{11}|snapchat-[A-Za-z0-9_-]{20,160})\\.(?:mp4|m4a)";
@@ -142,6 +142,9 @@ public class MainActivity extends Activity {
             webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         }
         configureWebView();
+        if (settingsBridge != null) {
+            applyAppearance(settingsBridge.appearance());
+        }
         String bind = inspectionMode ? "127.0.0.1:37659" : "127.0.0.1:37658";
         baseUrl = "http://" + bind + "/";
         File videoCache = inspectionMode
@@ -278,6 +281,11 @@ public class MainActivity extends Activity {
                 if ("127.0.0.1".equals(uri.getHost())) {
                     return false;
                 }
+                if (request.isRedirect() || !request.hasGesture()) {
+                    Toast.makeText(MainActivity.this, "External redirect blocked",
+                            Toast.LENGTH_SHORT).show();
+                    return true;
+                }
                 startActivity(new Intent(Intent.ACTION_VIEW, uri));
                 return true;
             }
@@ -312,7 +320,30 @@ public class MainActivity extends Activity {
     }
 
     private boolean handleModeSwitch(Uri uri) {
-        if (!"rustdl".equals(uri.getScheme()) || !"mode".equals(uri.getHost())) {
+        if (!"rustdl".equals(uri.getScheme())) {
+            return false;
+        }
+        if ("stream".equals(uri.getHost())) {
+            if (inspectionMode) {
+                Toast.makeText(this, "Streaming is unavailable in inspection mode",
+                        Toast.LENGTH_SHORT).show();
+                return true;
+            }
+            String url = uri.getQueryParameter("url");
+            if (!StreamingActivity.isAllowedUrl(url)) {
+                Toast.makeText(this, "That streaming URL is not supported",
+                        Toast.LENGTH_SHORT).show();
+                return true;
+            }
+            Intent streaming = new Intent(this, StreamingActivity.class);
+            streaming.putExtra(StreamingActivity.EXTRA_URL, url);
+            streaming.putExtra(
+                    StreamingActivity.EXTRA_MANIFEST_URL,
+                    baseUrl + "__app/stream-manifest.json?url=" + Uri.encode(url));
+            startActivity(streaming);
+            return true;
+        }
+        if (!"mode".equals(uri.getHost())) {
             return false;
         }
         if ("/inspection".equals(uri.getPath())) {
@@ -391,6 +422,31 @@ public class MainActivity extends Activity {
         });
     }
 
+    void applyAppearance(String requestedAppearance) {
+        handler.post(() -> {
+            String appearance = requestedAppearance == null ? "system" : requestedAppearance;
+            boolean light = "light".equals(appearance)
+                    || ("system".equals(appearance)
+                    && (getResources().getConfiguration().uiMode
+                    & Configuration.UI_MODE_NIGHT_MASK) != Configuration.UI_MODE_NIGHT_YES);
+            getWindow().setStatusBarColor(light ? Color.rgb(238, 242, 248) : Color.rgb(9, 10, 15));
+            getWindow().setNavigationBarColor(light ? Color.rgb(238, 242, 248) : Color.rgb(9, 10, 15));
+            View decor = getWindow().getDecorView();
+            int flags = decor.getSystemUiVisibility();
+            int lightBars = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            decor.setSystemUiVisibility(light ? flags | lightBars : flags & ~lightBars);
+        });
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (settingsBridge != null && "system".equals(settingsBridge.appearance())) {
+            applyAppearance("system");
+        }
+    }
+
     void setPlaybackActive(boolean active, int width, int height) {
         handler.post(() -> {
             playbackActive = active;
@@ -461,6 +517,9 @@ public class MainActivity extends Activity {
                         | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().getDecorView().setSystemUiVisibility(previousSystemUiVisibility);
         applyPlaybackScreenPreferenceNow();
+        if (settingsBridge != null) {
+            applyAppearance(settingsBridge.appearance());
+        }
 
         if (fullscreenCallback != null) {
             fullscreenCallback.onCustomViewHidden();

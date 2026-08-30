@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 final class ThumbnailManager {
     private static final Pattern VIDEO_NAME = Pattern.compile(
             "(?:[0-9]+-[1-9][0-9]*|youtube-[A-Za-z0-9_-]{11}|snapchat-[A-Za-z0-9_-]{20,160})\\.mp4");
-    private static final int MAX_WIDTH = 640;
+    private static final int MAX_WIDTH = 480;
     private static final Semaphore GENERATION_SLOTS = new Semaphore(2);
 
     private ThumbnailManager() {
@@ -68,7 +68,7 @@ final class ThumbnailManager {
                 return false;
             }
             try (FileOutputStream output = new FileOutputStream(pending)) {
-                if (!outputBitmap.compress(Bitmap.CompressFormat.JPEG, 84, output)) {
+                if (!outputBitmap.compress(Bitmap.CompressFormat.JPEG, 80, output)) {
                     throw new IOException("Could not encode thumbnail");
                 }
                 output.flush();

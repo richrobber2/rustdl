@@ -17,6 +17,8 @@ final class SettingsBridge {
     private static final String DOWNLOAD_FOLDER = "download-folder";
     private static final String KEEP_SCREEN_AWAKE = "keep-screen-awake";
     private static final String DIAGNOSTICS_REFRESH_SECONDS = "diagnostics-refresh-seconds";
+    private static final String APPEARANCE = "appearance";
+    private static final String SPACE_EFFECT = "space-effect";
 
     private final MainActivity activity;
     private final SharedPreferences preferences;
@@ -32,7 +34,8 @@ final class SettingsBridge {
     }
 
     @JavascriptInterface
-    public String save(String requestedFolder, boolean keepAwake, int refreshSeconds) {
+    public String save(String requestedFolder, boolean keepAwake, int refreshSeconds,
+            String requestedAppearance, boolean spaceEffect) {
         String folder = normalizeFolder(requestedFolder);
         if (folder == null) {
             return response(false,
@@ -41,12 +44,21 @@ final class SettingsBridge {
         if (!validRefreshSeconds(refreshSeconds)) {
             return response(false, "Choose a supported diagnostics refresh interval");
         }
+        String appearance = normalizeAppearance(requestedAppearance);
+        if (appearance == null) {
+            return response(false, "Choose system, light, or dark appearance");
+        }
         boolean saved = preferences.edit()
                 .putString(DOWNLOAD_FOLDER, folder)
                 .putBoolean(KEEP_SCREEN_AWAKE, keepAwake)
                 .putInt(DIAGNOSTICS_REFRESH_SECONDS, refreshSeconds)
+                .putString(APPEARANCE, appearance)
+                .putBoolean(SPACE_EFFECT, spaceEffect)
                 .commit();
-        if (saved) activity.applyPlaybackScreenPreference();
+        if (saved) {
+            activity.applyPlaybackScreenPreference();
+            activity.applyAppearance(appearance);
+        }
         return response(saved, saved ? "Settings saved" : "Android could not save settings");
     }
 
@@ -56,8 +68,13 @@ final class SettingsBridge {
                 .remove(DOWNLOAD_FOLDER)
                 .remove(KEEP_SCREEN_AWAKE)
                 .remove(DIAGNOSTICS_REFRESH_SECONDS)
+                .remove(APPEARANCE)
+                .remove(SPACE_EFFECT)
                 .commit();
-        if (saved) activity.applyPlaybackScreenPreference();
+        if (saved) {
+            activity.applyPlaybackScreenPreference();
+            activity.applyAppearance("system");
+        }
         return response(saved, saved ? "Defaults restored" : "Android could not reset settings");
     }
 
@@ -65,6 +82,27 @@ final class SettingsBridge {
     public int diagnosticsRefreshSeconds() {
         int value = preferences.getInt(DIAGNOSTICS_REFRESH_SECONDS, 5);
         return validRefreshSeconds(value) ? value : 5;
+    }
+
+    @JavascriptInterface
+    public String appearance() {
+        String value = preferences.getString(APPEARANCE, "system");
+        String normalized = normalizeAppearance(value);
+        return normalized == null ? "system" : normalized;
+    }
+
+    @JavascriptInterface
+    public boolean setAppearance(String requestedAppearance) {
+        String appearance = normalizeAppearance(requestedAppearance);
+        boolean saved = appearance != null
+                && preferences.edit().putString(APPEARANCE, appearance).commit();
+        if (saved) activity.applyAppearance(appearance);
+        return saved;
+    }
+
+    @JavascriptInterface
+    public boolean spaceEffectEnabled() {
+        return preferences.getBoolean(SPACE_EFFECT, true);
     }
 
     boolean keepScreenAwake() {
@@ -90,6 +128,8 @@ final class SettingsBridge {
             result.put("downloadPath", "Downloads/" + downloadFolder());
             result.put("keepScreenAwake", keepScreenAwake());
             result.put("diagnosticsRefreshSeconds", diagnosticsRefreshSeconds());
+            result.put("appearance", appearance());
+            result.put("spaceEffectEnabled", spaceEffectEnabled());
             return result.toString();
         } catch (JSONException impossible) {
             return "{\"ok\":false,\"detail\":\"Could not encode settings\"}";
@@ -98,6 +138,13 @@ final class SettingsBridge {
 
     private static boolean validRefreshSeconds(int value) {
         return value == 3 || value == 5 || value == 10 || value == 30;
+    }
+
+    private static String normalizeAppearance(String value) {
+        if (value == null) return null;
+        String appearance = value.trim().toLowerCase();
+        return appearance.equals("system") || appearance.equals("light")
+                || appearance.equals("dark") ? appearance : null;
     }
 
     private static String normalizeFolder(String value) {

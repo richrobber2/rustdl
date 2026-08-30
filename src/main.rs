@@ -2,12 +2,14 @@ mod activity;
 mod activity_state;
 #[cfg(test)]
 mod activity_tests;
+mod aniwaves;
 mod live_events;
 #[cfg(test)]
 mod live_events_tests;
 mod settings;
 #[cfg(test)]
 mod settings_tests;
+mod streaming_library;
 #[cfg(test)]
 mod streaming_tests;
 
@@ -37,8 +39,9 @@ use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::{
-    Condvar, Mutex, Once, OnceLock,
-    atomic::{AtomicU64, Ordering},
+    Arc, Condvar, Mutex, Once, OnceLock,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+    mpsc::{SyncSender, TrySendError, sync_channel},
 };
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -109,7 +112,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .gallery-filters button { width: auto; padding: .5rem .68rem; border: 1px solid #ffffff20; border-radius: 999px; color: #b9c0cd; background: #181b24; font-size: .68rem; }
     .gallery-filters button[aria-pressed="true"] { color: #07110f; border-color: #70dfc9; background: #70dfc9; }
     .gallery-filter-status { color: #777f90; font-size: .7rem; }
+    .playback-queue-status { color: #8fe3d2; font-size: .7rem; font-weight: 800; }
     .gallery-empty { grid-column: 1/-1; padding: 1.2rem; border: 1px dashed #ffffff24; border-radius: 14px; color: #8f97a8; text-align: center; }
+    .gallery-sentinel { grid-column: 1/-1; height: 1px; pointer-events: none; }
     .gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .85rem; }
     .media-card { min-width: 0; overflow: hidden; border: 1px solid #ffffff16; border-radius: 17px; color: #fff; background: #090a10; text-decoration: none; transition: transform .18s ease, border-color .18s ease; }
     .media-card:hover { transform: translateY(-2px); border-color: #70dfc959; }
@@ -129,13 +134,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .media-state { color: #8fe3d2; font-size: .64rem; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; }
     .watch-progress { position: absolute; z-index: 3; inset: auto .7rem .6rem; height: 4px; overflow: hidden; border-radius: 999px; background: #ffffff42; }
     .watch-progress i { display: block; height: 100%; border-radius: inherit; background: #70dfc9; }
-    .media-card-shell { position: relative; min-width: 0; }
+    .media-card-shell { position: relative; min-width: 0; contain: layout paint style; }
     .media-card-shell, .gallery > .media-card { content-visibility: auto; contain-intrinsic-size: auto 17rem; }
     .media-card-shell > .media-card { display: block; height: 100%; }
     .card-menu-button {
       position: absolute; z-index: 5; top: .55rem; right: .55rem; width: 2.35rem; height: 2.35rem;
       padding: 0; border: 1px solid #ffffff32; border-radius: 50%; color: #fff;
-      background: #07090dcc; box-shadow: 0 8px 24px #0007; backdrop-filter: blur(10px);
+      background: #07090de8; box-shadow: 0 8px 20px #0007;
     }
     .card-menu-button:hover { color: #07110f; background: #70dfc9; }
     .card-popover, .control-popover {
@@ -170,7 +175,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
     @supports (animation-timeline: view()) {
       @keyframes gallery-reveal { from { opacity: .35; transform: translateY(18px) scale(.985); } to { opacity: 1; transform: none; } }
-      .media-card-shell, .gallery > .media-card { animation: gallery-reveal both linear; animation-timeline: view(); animation-range: entry 0% entry 45%; }
+      .media-card-shell:nth-child(-n+20), .gallery > .media-card:nth-child(-n+20) { animation: gallery-reveal both linear; animation-timeline: view(); animation-range: entry 0% entry 45%; }
     }
     @keyframes pulse { 50% { transform: scale(.9); box-shadow: 0 0 0 10px #70dfc914; } }
     .inspection { margin-bottom: 1.2rem; padding: .75rem 1rem; border: 1px solid #70dfc955; border-radius: 12px; color: #8fe3d2; background: #70dfc912; font-size: .82rem; font-weight: 750; }
@@ -180,21 +185,21 @@ const INDEX_HTML: &str = r#"<!doctype html>
   </style>
 </head>
 <body>
-  <main>
+  <main class="home-shell">
     <!--MODE_SWITCH-->
     <!--INSPECTION_BANNER-->
     <div class="badge">Built with Rust</div>
     <h1>Save a video.</h1>
-    <p>Paste X posts, threads, profiles, YouTube videos or playlists, or Snapchat Spotlight links. RustDL finds every video first, then lets you choose what enters the queue.</p>
+    <p>Paste X posts, threads, profiles, YouTube videos or playlists, Snapchat Spotlight links, or browse AniWaves as a streaming-only catalog.</p>
     <form id="downloader" action="/discover" method="get">
-      <label for="source">X, YouTube, or Snapchat links</label>
+      <label for="source">X, YouTube, Snapchat, or AniWaves links</label>
       <div class="controls">
         <textarea id="source" name="source" rows="3" inputmode="url"
-          placeholder="Post, profile, playlist, Short, or Spotlight" required autofocus></textarea>
+          placeholder="Post, playlist, Short, Spotlight, or streaming catalog" required autofocus></textarea>
         <button type="submit">Find videos</button>
       </div>
     </form>
-    <div class="tool-links"><a class="queue-link" id="activity-link" href="/activity">Activity <span class="activity-count" id="activity-count" hidden></span> →</a><a class="queue-link" href="/queue">Download queue →</a><a class="queue-link" href="/storage">Storage manager →</a><a class="queue-link" href="/peers">Device transfer →</a><a class="queue-link" href="/diagnostics">Diagnostics →</a><a class="queue-link" href="/settings">Settings →</a><a class="queue-link" href="/changelog">What’s new →</a></div>
+    <div class="tool-links"><a class="queue-link" href="/streaming">AniWaves streaming →</a><a class="queue-link" id="activity-link" href="/activity">Activity <span class="activity-count" id="activity-count" hidden></span> →</a><a class="queue-link" href="/queue">Download queue →</a><a class="queue-link" href="/storage">Storage manager →</a><a class="queue-link" href="/peers">Device transfer →</a><a class="queue-link" href="/diagnostics">Diagnostics →</a><a class="queue-link" href="/settings">Settings →</a><a class="queue-link" href="/changelog">What’s new →</a></div>
     <p class="fine-print">Public posts only. Download media you have permission to save.</p>
     <!--SAVED_VIDEOS-->
   </main>
@@ -349,7 +354,7 @@ const PLAYER_CSS: &str = r#"
     .mini-player-dock .player-toolbar, .mini-player-dock .control-island, .mini-player-dock .download-label, .mini-player-dock .control-popover, .mini-player-dock .seek-toast { display: none; }
     .mini-player-dock video { display: block; width: 100%; max-height: 34vh; aspect-ratio: 16/9; border: 0; border-radius: 0; object-fit: contain; background: #000; }
     .mini-player-dock audio { display: block; width: calc(100% - 1rem); margin: .5rem; }
-    .mini-player-footer { display: grid; grid-template-columns: minmax(0,1fr) repeat(4,2.35rem); align-items: center; gap: .35rem; padding: .48rem; }
+    .mini-player-footer { display: grid; grid-template-columns: minmax(0,1fr) repeat(5,2.35rem); align-items: center; gap: .35rem; padding: .48rem; }
     .mini-player-title { min-width: 0; overflow: hidden; padding: 0 .3rem; color: #e7ebf2; font: 750 .7rem/1.2 system-ui; text-overflow: ellipsis; white-space: nowrap; }
     .mini-player-footer button { display: grid; place-items: center; width: 2.35rem; height: 2.35rem; padding: 0; border: 0; border-radius: 10px; color: #eef1f6; background: #ffffff0b; font: 800 .8rem/1 system-ui; }
     .mini-player-footer button:hover { color: #07110f; background: #70dfc9; }
@@ -357,7 +362,7 @@ const PLAYER_CSS: &str = r#"
     @media (prefers-reduced-motion: reduce) { .mini-player-dock { animation: none; } }
     .control-island {
       position: relative; z-index: 8; display: grid; margin-top: .55rem;
-      grid-template-columns: auto auto minmax(5rem,1fr) repeat(6,auto); align-items: center; gap: .5rem;
+      grid-template-columns: auto auto auto minmax(5rem,1fr) repeat(6,auto); align-items: center; gap: .5rem;
       padding: .62rem; border: 1px solid #ffffff2b; border-radius: 16px; color: #fff;
       background: linear-gradient(180deg,#111621,#090c12); box-shadow: inset 0 1px #ffffff0c;
       transition: opacity .2s ease, transform .2s ease;
@@ -412,7 +417,7 @@ const PLAYER_CSS: &str = r#"
     .player-frame:fullscreen .download-label { position: absolute; z-index: 4; right: .5rem; bottom: 3.85rem; margin: 0; color: #d5dae4; text-shadow: 0 2px 5px #000; }
     body.pip .control-island, body.pip .download-label { display: none; }
     @media (max-width: 700px) {
-      .control-island { grid-template-columns: auto minmax(4rem,1fr) repeat(4,auto); gap: .35rem; padding: .45rem; }
+      .control-island { grid-template-columns: auto auto minmax(4rem,1fr) repeat(4,auto); gap: .35rem; padding: .45rem; }
       .player-frame:fullscreen .control-island { left: .55rem; right: .55rem; bottom: .55rem; }
       .control-time, [data-control-mute], [data-control-pip] { display: none; }
       .control-button { min-width: 2.25rem; height: 2.25rem; }
@@ -420,9 +425,307 @@ const PLAYER_CSS: &str = r#"
     }
 "#;
 
+const DARK_SPACE_BACKGROUND: &[u8] = include_bytes!("../assets/dark-space-v1.png");
+const DARK_SPACE_BACKGROUND_PLACEHOLDER: &str = "__RUSTDL_DARK_SPACE_BACKGROUND__";
+
+const APPEARANCE_CSS: &str = r#"
+  :root {
+    --rustdl-page: #090a0f;
+    --rustdl-page-background-image: linear-gradient(#05070ca8, #05070ca8), url("__RUSTDL_DARK_SPACE_BACKGROUND__");
+    --rustdl-shell: linear-gradient(145deg, #171a24ed, #0e1018f5);
+    --rustdl-shell-shadow: 0 32px 100px #000a, inset 0 1px #ffffff0d;
+    --rustdl-surface: #11131bf2;
+    --rustdl-surface-soft: #090b11;
+    --rustdl-surface-border: #ffffff20;
+    --rustdl-surface-shadow: 0 10px 30px #0005;
+    --rustdl-text: #f7f7f8;
+    --rustdl-muted: #9ca3b3;
+    --rustdl-faint: #7f8798;
+    --rustdl-control-text: #dfe5ef;
+    --rustdl-control: #181b24;
+    --rustdl-control-hover: #232833;
+    --rustdl-control-shadow: 0 3px 10px #0003;
+    --rustdl-input: #080a10;
+    --rustdl-input-border: #ffffff28;
+    --rustdl-input-shadow: inset 0 1px 2px #0003;
+    --rustdl-placeholder: #7b8393;
+    --rustdl-accent: #70dfc9;
+    --rustdl-accent-ink: #07110f;
+    --rustdl-accent-soft: #70dfc914;
+    --rustdl-accent-border: #70dfc944;
+    --rustdl-accent-shadow: 0 6px 16px #70dfc930;
+    --rustdl-selected: #13201f;
+    --rustdl-danger: #ffaaa5;
+    --rustdl-danger-fill: #b94f59;
+    --rustdl-danger-soft: #ff706b12;
+    --rustdl-danger-ink: #fff;
+    --rustdl-warning: #ffd08a;
+    --rustdl-disabled: #343946;
+    --rustdl-disabled-text: #7f8798;
+    --rustdl-track: #ffffff18;
+    --rustdl-focus: #70dfc938;
+    --rustdl-floating: #07090dcc;
+    --rustdl-floating-text: #fff;
+    --rustdl-floating-shadow: 0 8px 24px #0007;
+    --rustdl-popover: #11141df5;
+    --rustdl-popover-text: #e8ebf2;
+    --rustdl-popover-shadow: 0 24px 70px #000b;
+    --rustdl-grid-opacity: .18;
+    --rustdl-space-opacity: .48;
+    --rustdl-space-star: #dceaff;
+    --rustdl-space-glow: #89a8ff;
+    --rustdl-media: #090b10;
+    --rustdl-media-text: #f7f7fb;
+    --rustdl-media-muted: #aeb5c4;
+    --rustdl-media-control: #ffffff0a;
+    --rustdl-media-border: #ffffff20;
+    --rustdl-media-track: #ffffff3d;
+    --rustdl-media-accent: #70dfc9;
+    --rustdl-media-accent-ink: #07110f;
+  }
+  :root[data-theme="dark"] { color-scheme: dark; }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --rustdl-page: #eef2f8;
+    --rustdl-page-background-image: radial-gradient(circle at 12% 0, #d5defa 0, transparent 34rem), radial-gradient(circle at 100% 100%, #ccece5 0, transparent 30rem);
+    --rustdl-shell: #ffffffe0;
+    --rustdl-shell-shadow: 0 24px 65px #27436a1d, inset 0 1px #fff;
+    --rustdl-surface: #fffffff0;
+    --rustdl-surface-soft: #f1f5fa;
+    --rustdl-surface-border: #20365f28;
+    --rustdl-surface-shadow: 0 10px 30px #27436a1d;
+    --rustdl-text: #172033;
+    --rustdl-muted: #5d687a;
+    --rustdl-faint: #738096;
+    --rustdl-control-text: #28405e;
+    --rustdl-control: #ffffffe8;
+    --rustdl-control-hover: #e8f2f0;
+    --rustdl-control-shadow: 0 3px 10px #27436a12;
+    --rustdl-input: #fbfcfe;
+    --rustdl-input-border: #20365f36;
+    --rustdl-input-shadow: inset 0 1px 2px #1d35570a;
+    --rustdl-placeholder: #7d899a;
+    --rustdl-accent: #087e72;
+    --rustdl-accent-ink: #fff;
+    --rustdl-accent-soft: #e9f5f2;
+    --rustdl-accent-border: #087e7240;
+    --rustdl-accent-shadow: 0 6px 16px #087e7230;
+    --rustdl-selected: #e5f4f1;
+    --rustdl-danger: #b42336;
+    --rustdl-danger-fill: #b42336;
+    --rustdl-danger-soft: #fff0f2;
+    --rustdl-warning: #946014;
+    --rustdl-disabled: #e7ebf0;
+    --rustdl-disabled-text: #7c8798;
+    --rustdl-track: #dce3ec;
+    --rustdl-focus: #087e7238;
+    --rustdl-floating: #fffffff0;
+    --rustdl-floating-text: #172033;
+    --rustdl-floating-shadow: 0 8px 22px #152c4f35;
+    --rustdl-popover: #fffffff5;
+    --rustdl-popover-text: #253149;
+    --rustdl-popover-shadow: 0 24px 64px #1d35572f;
+    --rustdl-grid-opacity: .08;
+    --rustdl-space-opacity: .18;
+    --rustdl-space-star: #2950a3;
+    --rustdl-space-glow: #7255bd;
+  }
+  body { isolation: isolate; }
+  body::after {
+    content: ""; position: fixed; z-index: -1; inset: -45vh -45vw; pointer-events: none; opacity: var(--rustdl-space-opacity);
+    background-image:
+      radial-gradient(circle, var(--rustdl-space-star) 0 1px, transparent 1.5px),
+      radial-gradient(circle, var(--rustdl-space-glow) 0 1.4px, transparent 2px),
+      radial-gradient(circle, var(--rustdl-space-star) 0 .7px, transparent 1.2px);
+    background-position: 0 0, 37px 61px, 83px 19px;
+    background-size: 89px 89px, 137px 137px, 53px 53px;
+    transform: translate3d(-3%, -2%, 0) rotate(.001deg); will-change: transform;
+    animation: rustdl-space-drift 95s linear infinite;
+  }
+  :root[data-space="off"] body::after, body.pip::after { display: none; }
+  :root[data-space-paused="true"] body::after { animation-play-state: paused; }
+  @keyframes rustdl-space-drift { to { transform: translate3d(7%, 6%, 0) rotate(.001deg); } }
+  .rustdl-theme-toggle {
+    position: fixed; z-index: 2147483000; left: max(.65rem, env(safe-area-inset-left)); bottom: max(.65rem, env(safe-area-inset-bottom));
+    display: grid; place-items: center; width: 2.75rem !important; min-width: 2.75rem; height: 2.75rem !important; min-height: 2.75rem;
+    margin: 0 !important; padding: 0 !important; border: 1px solid var(--rustdl-surface-border) !important; border-radius: 50% !important;
+    color: var(--rustdl-control-text) !important; background: var(--rustdl-control) !important; box-shadow: var(--rustdl-control-shadow) !important;
+    backdrop-filter: blur(16px); font: 800 1rem/1 system-ui !important; cursor: pointer;
+  }
+  .rustdl-theme-toggle:focus-visible { outline: 3px solid var(--rustdl-accent); outline-offset: 3px; }
+  body.pip .rustdl-theme-toggle { display: none; }
+  :root[data-theme] {
+    background-color: var(--rustdl-page) !important;
+    background-image: var(--rustdl-page-background-image) !important;
+    background-position: center !important;
+    background-size: cover !important;
+    background-repeat: no-repeat !important;
+    background-attachment: fixed !important;
+  }
+  :root[data-theme] body {
+    color: var(--rustdl-text) !important;
+    background: transparent !important;
+  }
+  :root[data-theme] body::before { opacity: var(--rustdl-grid-opacity); }
+  :root[data-theme] body.pip { background: #000 !important; }
+  :root[data-theme] :is(.home-shell, .player-shell) {
+    color: var(--rustdl-text) !important; border-color: var(--rustdl-surface-border) !important;
+    background: var(--rustdl-shell) !important; box-shadow: var(--rustdl-shell-shadow) !important;
+  }
+  :root[data-theme] :is(
+    .card, .panel, article, .media-card, .quality-card, .candidate, .empty, .metric, .item, .system,
+    .metrics > div, .gallery-tools, .playlist-tools, .selection-bar, .batch-format, .queue-mini,
+    .meta-card, .toolbar, .jump, .notice
+  ) {
+    color: var(--rustdl-text) !important; border-color: var(--rustdl-surface-border) !important;
+    background: var(--rustdl-surface) !important; box-shadow: var(--rustdl-surface-shadow) !important;
+  }
+  :root[data-theme] :is(.health div, .system-row, .media-row, .pair code, .panel article, .panel li) {
+    color: var(--rustdl-text) !important; border-color: var(--rustdl-surface-border) !important;
+    background: var(--rustdl-surface-soft) !important; box-shadow: none !important;
+  }
+  :root[data-theme] :is(h1, h2, h3, strong, label, code, .media-title, .value, .file-block) { color: var(--rustdl-text) !important; }
+  :root[data-theme] :is(
+    p, small, ul, .hint, .copy, .status, .size, .sub, .media-file, .library-count,
+    .gallery-filter-status, .fine-print, .queue-mini-info span, .candidate-copy span,
+    .candidate-copy code, .metric span, .system-row span, .release-actions > span, .value.unavailable
+  ) { color: var(--rustdl-muted) !important; }
+  :root[data-theme] :is(.gallery-filter-status, .release-actions > span, .value.unavailable) { color: var(--rustdl-faint) !important; }
+  :root[data-theme] :is(.eyebrow, .phase, .media-state, .badge, .queue-link, .quality, .live, .destination, .selection-bar strong, .folder span) {
+    color: var(--rustdl-accent) !important;
+  }
+  :root[data-theme] input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+  :root[data-theme] textarea, :root[data-theme] select, :root[data-theme] .folder {
+    color: var(--rustdl-text) !important; border-color: var(--rustdl-input-border) !important;
+    background: var(--rustdl-input) !important; box-shadow: var(--rustdl-input-shadow) !important;
+  }
+  :root[data-theme] :is(input, textarea)::placeholder { color: var(--rustdl-placeholder) !important; opacity: 1; }
+  :root[data-theme] :is(input, textarea, select):focus {
+    border-color: var(--rustdl-accent) !important; box-shadow: 0 0 0 3px var(--rustdl-focus) !important;
+  }
+  :root[data-theme] button:not(.rustdl-theme-toggle):not(.card-menu-button):not(.control-button):not(.player-control),
+  :root[data-theme] :is(.top > a, header > a, .back, nav a, .secondary, .action, .goto, .mode-switch, .collection-nav a) {
+    color: var(--rustdl-control-text) !important; border-color: var(--rustdl-surface-border) !important; background: var(--rustdl-control) !important;
+    box-shadow: var(--rustdl-control-shadow) !important;
+  }
+  :root[data-theme] button:not(.rustdl-theme-toggle):not(.card-menu-button):not(.control-button):not(.player-control):hover,
+  :root[data-theme] :is(.top > a, header > a, .back, nav a, .secondary, .action, .goto, .mode-switch, .collection-nav a):hover {
+    color: var(--rustdl-text) !important; border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-control-hover) !important;
+  }
+  :root[data-theme] :is(
+    .primary, #downloader button[type="submit"], form > button[type="submit"], .selection-bar button[type="submit"],
+    .filters button.active, #version-go, .panel > .actions button, .current, .activity-count, .queue-mini > a
+  ) {
+    color: var(--rustdl-accent-ink) !important; border-color: var(--rustdl-accent) !important; background: var(--rustdl-accent) !important;
+    box-shadow: var(--rustdl-accent-shadow) !important;
+  }
+  :root[data-theme] button:disabled { color: var(--rustdl-disabled-text) !important; background: var(--rustdl-disabled) !important; box-shadow: none !important; }
+  :root[data-theme] :is(button, a, input, textarea, select):focus-visible { outline: 3px solid var(--rustdl-focus); outline-offset: 2px; }
+  :root[data-theme] :is(.progress, .bar, .queue-mini-progress) { background: var(--rustdl-track) !important; }
+  :root[data-theme] :is(.error, .batch-error, .status.error, .live.offline, .live.error, .danger) { color: var(--rustdl-danger) !important; }
+  :root[data-theme] .batch-error { border: 1px solid var(--rustdl-danger); background: var(--rustdl-danger-soft) !important; }
+  :root[data-theme] :is(.warning, .badge.warning) { color: var(--rustdl-warning) !important; }
+  :root[data-theme] .switch i { background: var(--rustdl-disabled) !important; }
+  :root[data-theme] .switch input:checked + i { background: var(--rustdl-accent) !important; }
+  :root[data-theme] .candidate:has(input:checked) { border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-selected) !important; }
+  :root[data-theme] .check { border-color: var(--rustdl-input-border) !important; background: var(--rustdl-surface-soft) !important; }
+  :root[data-theme] .candidate input:checked + .check { color: var(--rustdl-accent-ink) !important; border-color: var(--rustdl-accent) !important; background: var(--rustdl-accent) !important; }
+  :root[data-theme] .gallery-filters button {
+    color: var(--rustdl-control-text) !important; border-color: var(--rustdl-surface-border) !important; background: var(--rustdl-surface-soft) !important;
+    box-shadow: var(--rustdl-control-shadow) !important;
+  }
+  :root[data-theme] .gallery-filters button:hover { color: var(--rustdl-text) !important; border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-control-hover) !important; }
+  :root[data-theme] .gallery-filters button[aria-pressed="true"] {
+    color: var(--rustdl-accent-ink) !important; border-color: var(--rustdl-accent) !important; background: var(--rustdl-accent) !important;
+    box-shadow: var(--rustdl-accent-shadow) !important;
+  }
+  :root[data-theme] .card-menu-button {
+    color: var(--rustdl-floating-text) !important; border-color: var(--rustdl-surface-border) !important; background: var(--rustdl-floating) !important;
+    box-shadow: var(--rustdl-floating-shadow) !important;
+  }
+  :root[data-theme] .card-menu-button:hover, :root[data-theme] .card-menu-button:focus-visible {
+    color: var(--rustdl-accent-ink) !important; border-color: var(--rustdl-accent) !important; background: var(--rustdl-accent) !important;
+  }
+  :root[data-theme] .card-popover {
+    color: var(--rustdl-popover-text) !important; border-color: var(--rustdl-surface-border) !important; background: var(--rustdl-popover) !important;
+    box-shadow: var(--rustdl-popover-shadow) !important;
+  }
+  :root[data-theme] .card-popover :is(a, button) { color: var(--rustdl-popover-text) !important; background: transparent !important; }
+  :root[data-theme] .card-popover :is(a, button):is(:hover, :focus-visible) { color: var(--rustdl-accent-ink) !important; background: var(--rustdl-accent) !important; }
+  :root[data-theme] .card-popover .danger { color: var(--rustdl-danger) !important; }
+  :root[data-theme] .card-popover .danger:is(:hover, :focus-visible) { color: var(--rustdl-danger-ink) !important; background: var(--rustdl-danger-fill) !important; }
+  :root[data-theme] :is(.collection-nav a, .mode-switch) {
+    color: var(--rustdl-accent) !important; border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-accent-soft) !important;
+    box-shadow: var(--rustdl-control-shadow) !important;
+  }
+  :root[data-theme] :is(.media-thumb, .player-frame, .synthetic-video, .mini-player-dock, .control-island, .control-popover) {
+    color: var(--rustdl-media-text) !important; border-color: var(--rustdl-media-border) !important; background-color: var(--rustdl-media) !important;
+  }
+  :root[data-theme] :is(.control-button, .player-control, .control-popover button, .mini-player-footer button) {
+    color: var(--rustdl-media-text) !important; border-color: var(--rustdl-media-border) !important; background: var(--rustdl-media-control) !important; box-shadow: none !important;
+  }
+  :root[data-theme] :is(.control-button, .player-control):is(:hover, [aria-pressed="true"]),
+  :root[data-theme] .control-popover button.active {
+    color: var(--rustdl-media-accent-ink) !important; border-color: var(--rustdl-media-accent) !important; background: var(--rustdl-media-accent) !important;
+  }
+  :root[data-theme] :is(.player-toolbar, .download-label, .mini-player-title, .control-island .control-time) { color: var(--rustdl-media-text) !important; }
+  :root[data-theme] .control-detail { color: var(--rustdl-media-muted) !important; background: var(--rustdl-media-control) !important; }
+  :root[data-theme] :is(.timeline-track, .timeline-downloaded, .watch-progress) { background-color: var(--rustdl-media-track) !important; }
+  :root[data-theme] .brand { color: var(--rustdl-text) !important; }
+  :root[data-theme] .context-pill { color: var(--rustdl-muted) !important; border-color: var(--rustdl-surface-border) !important; background: var(--rustdl-surface-soft) !important; }
+  :root[data-theme] .meta-card .action { color: var(--rustdl-accent) !important; border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-accent-soft) !important; }
+  :root[data-theme] .version-link { color: var(--rustdl-text) !important; border: 0 !important; background: transparent !important; box-shadow: none !important; }
+  :root[data-theme] article:target { border-color: var(--rustdl-accent-border) !important; box-shadow: 0 0 0 3px var(--rustdl-focus), var(--rustdl-surface-shadow) !important; }
+  :root[data-theme] .release-actions { border-color: var(--rustdl-surface-border) !important; }
+  :root[data-theme] .goto { color: var(--rustdl-accent) !important; border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-accent-soft) !important; }
+  :root[data-theme] .media-card { overflow: hidden; }
+  @media (prefers-reduced-motion: reduce) { body::after { animation: none; transform: none; } }
+"#;
+
+const APPEARANCE_BOOT_SCRIPT: &str = r#"(()=>{try{const root=document.documentElement,bridge=window.RustDLSettings;let mode='system',space=true;if(bridge){mode=bridge.appearance();space=bridge.spaceEffectEnabled()}else{mode=localStorage.getItem('rustdl:appearance')||'system';space=localStorage.getItem('rustdl:space')!=='off'}if(!['system','light','dark'].includes(mode))mode='system';root.dataset.appearance=mode;root.dataset.theme=mode==='system'?(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark'):mode;root.dataset.space=space?'on':'off'}catch(_error){document.documentElement.dataset.theme=matchMedia('(prefers-color-scheme:light)').matches?'light':'dark'}})();"#;
+
+const APPEARANCE_SCRIPT: &str = r#"(()=>{
+  'use strict';
+  const root=document.documentElement,bridge=window.RustDLSettings||null,media=matchMedia('(prefers-color-scheme:light)'),reduced=matchMedia('(prefers-reduced-motion:reduce)');
+  const valid=mode=>['system','light','dark'].includes(mode)?mode:'system';
+  const resolve=mode=>mode==='system'?(media.matches?'light':'dark'):mode;
+  let button=null;
+  const label=()=>{if(!button)return;const next=root.dataset.theme==='dark'?'light':'dark';button.textContent=next==='light'?'☀':'☾';button.setAttribute('aria-label','Switch to '+next+' mode');button.title='Switch to '+next+' mode'};
+  const mutate=(mode,space)=>{root.dataset.appearance=mode;root.dataset.theme=resolve(mode);root.dataset.space=space?'on':'off';label()};
+  const persist=(mode,space)=>{try{localStorage.setItem('rustdl:appearance',mode);localStorage.setItem('rustdl:space',space?'on':'off')}catch(_error){}try{bridge?.setAppearance(mode)}catch(_error){}};
+  const share=(mode,space)=>{if(window===window.top){document.querySelectorAll('iframe').forEach(frame=>{try{frame.contentWindow.RustDLTheme?.receive(mode,space)}catch(_error){}})}else{try{window.parent.RustDLTheme?.receive(mode,space)}catch(_error){}}};
+  const apply=(requested,space=true,save=true,notify=true)=>{const mode=valid(requested),change=()=>mutate(mode,space);if(document.startViewTransition&&!reduced.matches)document.startViewTransition(change);else change();if(save)persist(mode,space);if(notify)share(mode,space)};
+  const receive=(requested,space=true)=>mutate(valid(requested),space);
+  window.RustDLTheme={apply,receive};
+  const mount=()=>{button=document.createElement('button');button.type='button';button.className='rustdl-theme-toggle';button.addEventListener('click',()=>apply(root.dataset.theme==='dark'?'light':'dark',root.dataset.space!=='off'));document.body.append(button);label()};
+  media.addEventListener?.('change',()=>{if(root.dataset.appearance==='system')mutate('system',root.dataset.space!=='off')});
+  document.addEventListener('visibilitychange',()=>root.dataset.spacePaused=String(document.hidden));
+  if(window===window.top){if(document.readyState==='loading')addEventListener('DOMContentLoaded',mount,{once:true});else mount()}
+})();"#;
+
 fn hashed_asset_path(name: &str, extension: &str, content: &str) -> String {
     let digest = blake3::hash(content.as_bytes()).to_hex();
     format!("/__app/{name}.{}.{}", &digest[..16], extension)
+}
+
+fn hashed_binary_asset_path(name: &str, extension: &str, content: &[u8]) -> String {
+    let digest = blake3::hash(content).to_hex();
+    format!("/__app/{name}.{}.{}", &digest[..16], extension)
+}
+
+fn dark_space_background_path() -> &'static str {
+    static PATH: OnceLock<String> = OnceLock::new();
+    PATH.get_or_init(|| hashed_binary_asset_path("dark-space", "png", DARK_SPACE_BACKGROUND))
+}
+
+fn appearance_css() -> &'static str {
+    static CSS: OnceLock<String> = OnceLock::new();
+    CSS.get_or_init(|| {
+        APPEARANCE_CSS.replace(
+            DARK_SPACE_BACKGROUND_PLACEHOLDER,
+            dark_space_background_path(),
+        )
+    })
 }
 
 fn playback_script_path() -> &'static str {
@@ -433,6 +736,32 @@ fn playback_script_path() -> &'static str {
 fn view_transition_script_path() -> &'static str {
     static PATH: OnceLock<String> = OnceLock::new();
     PATH.get_or_init(|| hashed_asset_path("view-transitions", "js", VIEW_TRANSITION_SCRIPT))
+}
+
+fn appearance_css_path() -> &'static str {
+    static PATH: OnceLock<String> = OnceLock::new();
+    PATH.get_or_init(|| hashed_asset_path("appearance", "css", appearance_css()))
+}
+
+fn appearance_script_path() -> &'static str {
+    static PATH: OnceLock<String> = OnceLock::new();
+    PATH.get_or_init(|| hashed_asset_path("appearance", "js", APPEARANCE_SCRIPT))
+}
+
+pub(crate) fn decorate_app_html(mut html: String) -> String {
+    if !html.contains("<!doctype html") || html.contains("data-rustdl-appearance") {
+        return html;
+    }
+    let head = format!(
+        r#"<link data-rustdl-appearance rel="stylesheet" href="{}"><script>{APPEARANCE_BOOT_SCRIPT}</script></head>"#,
+        appearance_css_path()
+    );
+    html = html.replacen("</head>", &head, 1);
+    let tail = format!(
+        r#"<script data-rustdl-appearance src="{}" defer></script></body>"#,
+        appearance_script_path()
+    );
+    html.replacen("</body>", &tail, 1)
 }
 
 fn index_css() -> &'static str {
@@ -553,6 +882,12 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
   const clearPosition=name=>{if(bridge)bridge.clearPosition(name);else localStorage.removeItem(localKey(name));};
   const loadRate=()=>bridge?Number(bridge.getPlaybackRate()):Number(localStorage.getItem('rustdl:rate')||1);
   const saveRate=rate=>{if(bridge)bridge.savePlaybackRate(rate);else localStorage.setItem('rustdl:rate',String(rate));};
+  const playbackQueueKey='rustdl:up-next:v1';
+  const validQueuedFilename=name=>typeof name==='string'&&/^[A-Za-z0-9_-]+\.(?:mp4|m4a)$/.test(name);
+  const loadPlaybackQueue=()=>{try{const value=safeParse(localStorage.getItem(playbackQueueKey));if(!Array.isArray(value))return[];return[...new Set(value.filter(validQueuedFilename))].slice(0,200)}catch(_error){return[]}};
+  const savePlaybackQueue=queue=>{queue=[...new Set(queue.filter(validQueuedFilename))].slice(0,200);try{localStorage.setItem(playbackQueueKey,JSON.stringify(queue))}catch(_error){}return queue};
+  const enqueuePlayback=name=>{const queue=loadPlaybackQueue();if(queue.includes(name))return false;queue.push(name);savePlaybackQueue(queue);return true};
+  const removeFromPlaybackQueue=name=>savePlaybackQueue(loadPlaybackQueue().filter(item=>item!==name));
   const fetchState=filename=>fetch('/__app/state.json'+(filename?'?file='+encodeURIComponent(filename):''),{cache:'no-store'}).then(response=>response.ok?response.json():Promise.reject()).catch(()=>null);
   const supportsPopover='showPopover' in HTMLElement.prototype;
   const connectPopover=(button,popover)=>{
@@ -587,17 +922,18 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
 
     const island=document.createElement('div');
     island.className='control-island';island.setAttribute('role','group');island.setAttribute('aria-label',audioOnly?'Audio controls':'Video controls');
-    island.innerHTML='<button class="control-button" type="button" data-control-play aria-label="Play">▶</button><span class="control-time" data-control-time>0:00 / 0:00</span><div class="timeline-shell"><span class="timeline-track"></span><span class="timeline-downloaded"></span><span class="timeline-played"></span><span class="download-boundary"></span><span class="scrub-anchor"></span><span class="scrub-preview"><img alt=""><video muted playsinline preload="metadata" aria-hidden="true"></video><output>0:00</output></span><input class="timeline-input" type="range" min="0" max="1000" value="0" aria-label="Seek video"></div><button class="control-button" type="button" data-control-mute aria-label="Mute">Vol</button><button class="control-button" type="button" data-control-speed aria-label="Playback speed">1×</button><button class="control-button" type="button" data-control-mini aria-label="Browse with mini-player">▦</button><button class="control-button" type="button" data-control-pip aria-label="Picture in picture">PiP</button><button class="control-button" type="button" data-control-more aria-label="More playback controls">•••</button><button class="control-button" type="button" data-control-fullscreen aria-label="Fullscreen">⛶</button>';
+    island.innerHTML='<button class="control-button" type="button" data-control-play aria-label="Play">▶</button><button class="control-button" type="button" data-control-next aria-label="Play next">⏭</button><span class="control-time" data-control-time>0:00 / 0:00</span><div class="timeline-shell"><span class="timeline-track"></span><span class="timeline-downloaded"></span><span class="timeline-played"></span><span class="download-boundary"></span><span class="scrub-anchor"></span><span class="scrub-preview"><img alt=""><video muted playsinline preload="metadata" aria-hidden="true"></video><output>0:00</output></span><input class="timeline-input" type="range" min="0" max="1000" value="0" aria-label="Seek video"></div><button class="control-button" type="button" data-control-mute aria-label="Mute">Vol</button><button class="control-button" type="button" data-control-speed aria-label="Playback speed">1×</button><button class="control-button" type="button" data-control-mini aria-label="Browse with mini-player">▦</button><button class="control-button" type="button" data-control-pip aria-label="Picture in picture">PiP</button><button class="control-button" type="button" data-control-more aria-label="More playback controls">•••</button><button class="control-button" type="button" data-control-fullscreen aria-label="Fullscreen">⛶</button>';
     const downloadLabel=document.createElement('span');downloadLabel.className='download-label';downloadLabel.textContent='Saved locally';
     const speedMenu=document.createElement('div');speedMenu.id='speed-popover';speedMenu.className='control-popover';speedMenu.setAttribute('popover','auto');
     speedMenu.innerHTML='<h3>Playback speed</h3><div class="control-popover-grid"></div>';
     const moreMenu=document.createElement('div');moreMenu.id='more-popover';moreMenu.className='control-popover';moreMenu.setAttribute('popover','auto');
-    moreMenu.innerHTML='<h3>Playback options</h3><div class="control-popover-grid"><button type="button" data-option-rotation>Lock rotation</button><button type="button" data-sleep="15">Sleep 15m</button><button type="button" data-sleep="30">Sleep 30m</button><button type="button" data-sleep="60">Sleep 60m</button><button type="button" data-sleep="0">Clear timer</button></div><div class="control-detail"><span data-quality>Quality · detecting</span><span data-audio>Audio · default track</span><span data-captions>Captions · none</span><a data-requality hidden>Choose another quality</a></div>';
+    moreMenu.innerHTML='<h3>Playback options</h3><div class="control-popover-grid"><button type="button" data-option-rotation>Lock rotation</button><button type="button" data-sleep="15">Sleep 15m</button><button type="button" data-sleep="30">Sleep 30m</button><button type="button" data-sleep="60">Sleep 60m</button><button type="button" data-sleep="0">Clear timer</button></div><div class="control-detail"><span data-up-next>Up Next · loading</span><button type="button" data-clear-up-next hidden>Clear Up Next</button><span data-quality>Quality · detecting</span><span data-audio>Audio · default track</span><span data-captions>Captions · none</span><a data-requality hidden>Choose another quality</a></div>';
     frame.append(island,downloadLabel,speedMenu,moreMenu);
     document.querySelector('.player-actions')?.remove();
     video.controls=false;video.dataset.enhanced='true';
 
     const play=island.querySelector('[data-control-play]');
+    const next=island.querySelector('[data-control-next]');
     const time=island.querySelector('[data-control-time]');
     const timeline=island.querySelector('.timeline-input');
     const played=island.querySelector('.timeline-played');
@@ -618,8 +954,22 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     const more=island.querySelector('[data-control-more]');
     const fullscreen=island.querySelector('[data-control-fullscreen]');
     const rotation=moreMenu.querySelector('[data-option-rotation]');
+    const upNextDetail=moreMenu.querySelector('[data-up-next]');
+    const clearUpNext=moreMenu.querySelector('[data-clear-up-next]');
     if(!audioOnly)previewImage.src='/thumbnail/'+encodeURIComponent(filename)+'.jpg';
     connectPopover(speed,speedMenu);connectPopover(more,moreMenu);
+
+    let playbackOrder=[];
+    const queuedWithoutCurrent=()=>loadPlaybackQueue().filter(item=>item!==filename);
+    if(loadPlaybackQueue().includes(filename))removeFromPlaybackQueue(filename);
+    const fallbackNext=()=>{const index=playbackOrder.indexOf(filename);return index>=0?playbackOrder[index+1]||null:playbackOrder.find(item=>item!==filename)||null};
+    const syncUpNext=()=>{const queue=queuedWithoutCurrent(),fallback=fallbackNext(),candidate=queue[0]||fallback;next.disabled=!candidate;next.setAttribute('aria-label',candidate?'Play next · '+candidate:'No next item');upNextDetail.textContent=queue.length?'Up Next · '+queue.length+' queued':'Up Next · '+(fallback?'gallery fallback ready':'queue empty');clearUpNext.hidden=queue.length===0};
+    const playbackOrderPromise=fetch('/__app/playback-order.json',{cache:'no-store'}).then(response=>response.ok?response.json():Promise.reject()).then(data=>{playbackOrder=Array.isArray(data.items)?data.items.filter(validQueuedFilename):[]}).catch(()=>{playbackOrder=[]}).finally(syncUpNext);
+    const advanceToNext=async()=>{await playbackOrderPromise;let queue=queuedWithoutCurrent().filter(item=>playbackOrder.includes(item));savePlaybackQueue(queue);if(queue.length){const target=queue.shift();savePlaybackQueue(queue);location.href='/watch/'+encodeURIComponent(target);return}const target=fallbackNext();if(target)location.href='/watch/'+encodeURIComponent(target);else showToast('Nothing queued next')};
+    next.addEventListener('click',advanceToNext);
+    clearUpNext.addEventListener('click',()=>{savePlaybackQueue([]);syncUpNext();showToast('Up Next cleared')});
+    addEventListener('storage',event=>{if(event.key===playbackQueueKey)syncUpNext()});
+    syncUpNext();
 
     const revealControls=()=>{
       frame.classList.remove('controls-idle');clearTimeout(idleTimer);
@@ -760,12 +1110,13 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       const footer=document.createElement('div');footer.className='mini-player-footer';
       const title=document.createElement('span');title.className='mini-player-title';title.textContent=filename;
       const miniPlay=document.createElement('button');miniPlay.type='button';miniPlay.setAttribute('aria-label','Play or pause');
+      const miniNext=document.createElement('button');miniNext.type='button';miniNext.textContent='⏭';miniNext.setAttribute('aria-label','Play next');
       const miniPip=document.createElement('button');miniPip.type='button';miniPip.textContent='PiP';miniPip.setAttribute('aria-label','Picture in picture');miniPip.hidden=audioOnly||(!nativePip&&!browserPip);
       const expand=document.createElement('button');expand.type='button';expand.textContent='↗';expand.setAttribute('aria-label','Return to full player');
       const close=document.createElement('button');close.type='button';close.textContent='×';close.setAttribute('aria-label','Close player');
-      footer.append(title,miniPlay,miniPip,expand,close);dock.append(frame,footer);document.body.append(browser,dock);
+      footer.append(title,miniPlay,miniNext,miniPip,expand,close);dock.append(frame,footer);document.body.append(browser,dock);
       miniState={browser,dock,play:miniPlay};document.body.classList.add('mini-player-mode');frame.style.viewTransitionName='none';syncMiniPlay();
-      miniPlay.addEventListener('click',togglePlayback);miniPip.addEventListener('click',enterPip);expand.addEventListener('click',exitMini);
+      miniPlay.addEventListener('click',togglePlayback);miniNext.addEventListener('click',advanceToNext);miniPip.addEventListener('click',enterPip);expand.addEventListener('click',exitMini);
       close.addEventListener('click',()=>{video.pause();savePosition(filename,video.currentTime,video.duration);location.href='/'});
     };
     mini.addEventListener('click',enterMini);
@@ -799,6 +1150,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       if(event.code==='Space'){event.preventDefault();togglePlayback()}
       if(event.code==='ArrowLeft')seekBy(-10)
       if(event.code==='ArrowRight')seekBy(10)
+      if(event.code==='KeyN')advanceToNext()
     });
 
     const updateDownloadState=state=>{
@@ -824,7 +1176,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
       const metadata={title:filename,artist:'RustDL',album:audioOnly?'Saved audio':'Saved videos'};
       if(!audioOnly)metadata.artwork=[{src:'/thumbnail/'+encodeURIComponent(filename)+'.jpg',type:'image/jpeg'}];
       navigator.mediaSession.metadata=new MediaMetadata(metadata);
-      const handlers={play:()=>video.play(),pause:()=>video.pause(),stop:()=>{video.pause();video.currentTime=0},seekbackward:event=>seekBy(-(event.seekOffset||10)),seekforward:event=>seekBy(event.seekOffset||10),seekto:event=>{if(finite(event.seekTime))seekSafely(event.seekTime)},previoustrack:()=>{video.currentTime=0}};
+      const handlers={play:()=>video.play(),pause:()=>video.pause(),stop:()=>{video.pause();video.currentTime=0},seekbackward:event=>seekBy(-(event.seekOffset||10)),seekforward:event=>seekBy(event.seekOffset||10),seekto:event=>{if(finite(event.seekTime))seekSafely(event.seekTime)},previoustrack:()=>{video.currentTime=0},nexttrack:advanceToNext};
       Object.entries(handlers).forEach(([action,handler])=>{try{navigator.mediaSession.setActionHandler(action,handler)}catch(_error){}});
     }
     addEventListener('pagehide',()=>{clearTimeout(sleepTimer);savePosition(filename,video.currentTime,video.duration);if(bridge){setNativePlaying(false);bridge.setRotationLocked(false)}});
@@ -834,7 +1186,26 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
 
   const gallery=document.querySelector('.library');
   if(!gallery)return;
-  const available=new Set(Array.from(document.querySelectorAll('.media-card[href^="/watch/"]')).map(card=>decodeURIComponent(card.getAttribute('href').slice(7))));
+  const galleryDataElement=document.getElementById('gallery-data');
+  const galleryEntries=galleryDataElement?safeParse(galleryDataElement.textContent)||[]:[];
+  const available=new Set(galleryEntries.map(entry=>entry.filename).filter(Boolean));
+  let thumbnailRetries=0,longTasks=0,rendered=0,matches=[];
+  try{new PerformanceObserver(list=>{longTasks+=list.getEntries().length}).observe({type:'longtask',buffered:true})}catch(_error){}
+  const rememberPerformance=renderMs=>{try{sessionStorage.setItem('rustdl:gallery-performance',JSON.stringify({total:galleryEntries.length,matching:matches.length,rendered,renderMs:Math.round(renderMs*10)/10,longTasks,thumbnailRetries,updated:Date.now()}))}catch(_error){}};
+  const wireThumbnail=image=>{
+    if(!image||image.dataset.thumbnailWired)return;image.dataset.thumbnailWired='true';
+    image.addEventListener('error',()=>{const retry=Number(image.dataset.thumbnailRetry||0);if(retry>=5)return;image.dataset.thumbnailRetry=String(retry+1);thumbnailRetries++;const source=image.src.split('?')[0];setTimeout(()=>{if(image.isConnected)image.src=source+'?retry='+(retry+1)+'&t='+Date.now()},Math.min(4000,300*2**retry))});
+  };
+  const createGalleryCard=(entry,index,resumeProgress=0)=>{
+    const card=document.createElement('a');card.className='media-card';card.href=entry.href;card.dataset.galleryIndex=String(index);card.dataset.galleryKind=entry.kind;
+    if(entry.kind==='playlist')card.classList.add('collection-folder');if(entry.kind==='audio'||entry.kind==='downloading-audio')card.classList.add('audio');if(entry.kind.startsWith('downloading'))card.classList.add('downloading');
+    const thumb=document.createElement('div');thumb.className='media-thumb';if(entry.transitionName)thumb.dataset.viewTransitionName=entry.transitionName;
+    if(entry.thumbnail){const image=document.createElement('img');image.className='media-art';image.loading='lazy';image.decoding='async';image.src='/thumbnail/'+encodeURIComponent(entry.thumbnail)+'.jpg';image.alt='';image.dataset.thumbnailRetry='0';wireThumbnail(image);thumb.append(image)}
+    if(resumeProgress>0){const progress=document.createElement('span');progress.className='watch-progress';const bar=document.createElement('i');bar.style.width=Math.min(100,resumeProgress*100)+'%';progress.append(bar);thumb.append(progress)}card.append(thumb);
+    const info=document.createElement('div');info.className='media-info';for(const [className,text] of [['media-state',entry.state],['media-title',entry.title],['media-file',entry.subtitle]]){const element=document.createElement('span');element.className=className;element.textContent=text;info.append(element)}card.append(info);
+    if(!entry.filename)return card;
+    const shell=document.createElement('div');shell.className='media-card-shell';const button=document.createElement('button');button.type='button';button.className='card-menu-button';button.textContent='•••';button.setAttribute('aria-label','Actions for '+entry.filename);shell.append(card,button);return shell;
+  };
   let items=[];
   if(bridge)items=safeParse(bridge.getContinueWatching())||[];
   else for(let index=0;index<localStorage.length;index++){
@@ -849,56 +1220,49 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
     const count=document.createElement('span');count.className='library-count';count.textContent=items.length+(items.length===1?' item':' items');head.append(count);section.append(head);
     const cards=document.createElement('div');cards.className='gallery';
     for(const item of items){
-      const card=document.createElement('a');card.className='media-card';card.href='/watch/'+encodeURIComponent(item.filename);
-      const thumb=document.createElement('div');thumb.className='media-thumb';thumb.dataset.viewTransitionName='video-'+item.filename.replace(/\.(?:mp4|m4a)$/,'').replace(/[^A-Za-z0-9-]/g,'-');
-      if(item.filename.endsWith('.m4a'))card.classList.add('audio');else{const image=document.createElement('img');image.className='media-art';image.loading='lazy';image.decoding='async';image.src='/thumbnail/'+encodeURIComponent(item.filename)+'.jpg';image.alt='';thumb.append(image)}
-      const progress=document.createElement('span');progress.className='watch-progress';const bar=document.createElement('i');bar.style.width=Math.min(100,item.position/item.duration*100)+'%';progress.append(bar);thumb.append(progress);card.append(thumb);
-      const info=document.createElement('div');info.className='media-info';const state=document.createElement('span');state.className='media-state';state.textContent='Resume';const name=document.createElement('span');name.className='media-title';name.textContent=item.filename;info.append(state,name);card.append(info);cards.append(card);
+      const audio=item.filename.endsWith('.m4a');cards.append(createGalleryCard({href:'/watch/'+encodeURIComponent(item.filename),filename:item.filename,state:'Resume',title:item.filename,subtitle:formatTime(item.position)+' watched',kind:audio?'audio':'video',thumbnail:audio?null:item.filename,transitionName:'video-'+item.filename.replace(/\.(?:mp4|m4a)$/,'').replace(/[^A-Za-z0-9-]/g,'-')},-1,item.position/item.duration));
     }
     section.append(cards);gallery.before(section);
   }
 
   let stateCache={jobs:[],active:0};
-  const enhanceGallery=()=>document.querySelectorAll('.media-card[href^="/watch/"]').forEach((card,index)=>{
-    if(card.closest('.media-card-shell'))return;
-    const filename=decodeURIComponent(card.getAttribute('href').slice(7));
-    const shell=document.createElement('div');shell.className='media-card-shell';card.replaceWith(shell);shell.append(card);
-    const button=document.createElement('button');button.type='button';button.className='card-menu-button';button.textContent='•••';button.setAttribute('aria-label','Actions for '+filename);
-    const menu=document.createElement('div');menu.className='card-popover';menu.id='card-actions-'+index+'-'+Math.random().toString(36).slice(2);menu.setAttribute('popover','auto');
-    const anchor='--card-'+index+'-'+Math.random().toString(36).slice(2);button.style.anchorName=anchor;menu.style.positionAnchor=anchor;
-    const nav=document.createElement('nav');
-    const play=document.createElement('a');play.href=card.href;play.textContent='Play';nav.append(play);
-    const send=document.createElement('a');send.href='/peers/send?file='+encodeURIComponent(filename);send.textContent='Send to device';nav.append(send);
-    if(bridge){const share=document.createElement('button');share.type='button';share.textContent=filename.endsWith('.m4a')?'Share audio':'Share video';share.addEventListener('click',()=>bridge.shareVideo(filename));nav.append(share)}
-    const watched=document.createElement('button');watched.type='button';watched.textContent='Mark watched';watched.addEventListener('click',()=>{if(bridge)bridge.markWatched(filename);else{clearPosition(filename);localStorage.setItem('rustdl:watched:'+filename,'1')}menu.hidePopover?.()});nav.append(watched);
-    const remove=document.createElement('a');remove.href='/storage/confirm?action=delete&file='+encodeURIComponent(filename);remove.className='danger';remove.textContent='Delete…';nav.append(remove);
-    menu.append(nav);shell.append(button,menu);connectPopover(button,menu);
-  });
-  enhanceGallery();
+  const queueStatus=gallery.querySelector('.playback-queue-status');
+  const syncGalleryQueueStatus=()=>{if(!queueStatus)return;const count=loadPlaybackQueue().length;queueStatus.textContent='Up Next · '+(count||'empty')};
+  syncGalleryQueueStatus();addEventListener('storage',event=>{if(event.key===playbackQueueKey)syncGalleryQueueStatus()});
+  let selectedFilename='',selectedButton=null;
+  const actionMenu=document.createElement('div');actionMenu.className='card-popover';actionMenu.id='gallery-card-actions';actionMenu.setAttribute('popover','auto');
+  const actionNav=document.createElement('nav');const actionLink=(text,key)=>{const link=document.createElement('a');link.textContent=text;link.dataset.cardAction=key;actionNav.append(link);return link};
+  const playAction=actionLink('Play','play');
+  const queueAction=document.createElement('button');queueAction.type='button';queueAction.dataset.cardAction='queue';actionNav.append(queueAction);
+  const sendAction=actionLink('Send to device','send'),sourceAction=actionLink('Open source','source'),qualityAction=actionLink('Choose another quality','quality');sourceAction.hidden=true;qualityAction.hidden=true;
+  let shareAction=null;if(bridge){shareAction=document.createElement('button');shareAction.type='button';shareAction.dataset.cardAction='share';actionNav.append(shareAction)}
+  const watchedAction=document.createElement('button');watchedAction.type='button';watchedAction.dataset.cardAction='watched';watchedAction.textContent='Mark watched';actionNav.append(watchedAction);
+  const deleteAction=actionLink('Delete…','delete');deleteAction.className='danger';actionMenu.append(actionNav);document.body.append(actionMenu);
+  const closeActionMenu=()=>{if(supportsPopover)actionMenu.hidePopover?.();else actionMenu.hidden=true};
+  const syncQueueAction=()=>{const queued=loadPlaybackQueue().includes(selectedFilename);queueAction.textContent=queued?'Remove from Up Next':'Add to Up Next';queueAction.setAttribute('aria-pressed',String(queued))};
+  const openActionMenu=button=>{const card=button.closest('.media-card-shell')?.querySelector('.media-card[href^="/watch/"]');if(!card)return;selectedFilename=decodeURIComponent(card.getAttribute('href').slice(7));selectedButton?.style.removeProperty('anchor-name');selectedButton=button;button.style.setProperty('anchor-name','--active-card-actions');actionMenu.style.setProperty('position-anchor','--active-card-actions');playAction.href=card.getAttribute('href');sendAction.href='/peers/send?file='+encodeURIComponent(selectedFilename);deleteAction.href='/storage/confirm?action=delete&file='+encodeURIComponent(selectedFilename);syncQueueAction();if(shareAction)shareAction.textContent=selectedFilename.endsWith('.m4a')?'Share audio':'Share video';const job=(stateCache.jobs||[]).find(item=>item.filename===selectedFilename);sourceAction.hidden=!job?.source;qualityAction.hidden=!job?.source;if(job?.source){sourceAction.href=job.source;qualityAction.href='/discover?source='+encodeURIComponent(job.source)}if(supportsPopover)actionMenu.showPopover();else actionMenu.hidden=false};
+  if(!supportsPopover)actionMenu.hidden=true;
+  document.addEventListener('click',event=>{const button=event.target instanceof Element?event.target.closest('.card-menu-button'):null;if(button){event.preventDefault();openActionMenu(button);return}if(!supportsPopover&&!actionMenu.contains(event.target))closeActionMenu()});
+  shareAction?.addEventListener('click',()=>{if(selectedFilename)bridge.shareVideo(selectedFilename);closeActionMenu()});
+  queueAction.addEventListener('click',()=>{if(!selectedFilename)return;if(loadPlaybackQueue().includes(selectedFilename))removeFromPlaybackQueue(selectedFilename);else enqueuePlayback(selectedFilename);syncQueueAction();syncGalleryQueueStatus();closeActionMenu()});
+  watchedAction.addEventListener('click',()=>{if(!selectedFilename)return;if(bridge)bridge.markWatched(selectedFilename);else{clearPosition(selectedFilename);localStorage.setItem('rustdl:watched:'+selectedFilename,'1')}closeActionMenu()});
 
   const galleryTools=document.querySelector('.gallery-tools'),galleryItems=document.getElementById('gallery-items');
   if(galleryTools&&galleryItems){
-    const search=galleryTools.querySelector('.gallery-search'),buttons=[...galleryTools.querySelectorAll('[data-gallery-filter]')],status=galleryTools.querySelector('.gallery-filter-status'),empty=document.getElementById('gallery-empty');
+    const search=galleryTools.querySelector('.gallery-search'),buttons=[...galleryTools.querySelectorAll('[data-gallery-filter]')],status=galleryTools.querySelector('.gallery-filter-status'),empty=document.getElementById('gallery-empty'),sentinel=document.getElementById('gallery-sentinel'),batchSize=32;
     const stateKey='rustdl:gallery:'+location.pathname;let savedState=safeParse(sessionStorage.getItem(stateKey))||{};
     const restoreY=Number(savedState.scrollY)||0;let filter=buttons.some(button=>button.dataset.galleryFilter===savedState.filter)?savedState.filter:'all';search.value=typeof savedState.query==='string'?savedState.query:'';
-    const entries=[...galleryItems.children].filter(node=>node!==empty).map(node=>{const card=node.matches('.media-card')?node:node.querySelector('.media-card');return card?{node,card,text:card.textContent.toLocaleLowerCase()}:null}).filter(Boolean);
-    const persistGalleryState=()=>{savedState={query:search.value,filter,scrollY:scrollY};sessionStorage.setItem(stateKey,JSON.stringify(savedState))};
-    const syncGalleryFilter=()=>{const query=search.value.trim().toLocaleLowerCase();let visible=0;for(const entry of entries){const folder=entry.card.classList.contains('collection-folder'),audio=entry.card.classList.contains('audio'),downloading=entry.card.classList.contains('downloading'),kindMatches=filter==='all'||filter==='playlists'&&folder||filter==='audio'&&audio||filter==='video'&&!folder&&!audio||filter==='downloading'&&downloading;const show=(!query||entry.text.includes(query))&&kindMatches;entry.node.hidden=!show;if(show)visible++}empty.hidden=visible!==0;status.textContent=visible+' of '+entries.length+' shown';buttons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.galleryFilter===filter)));persistGalleryState()};
+    galleryEntries.forEach(entry=>entry.searchText=[entry.state,entry.title,entry.subtitle].join(' ').toLocaleLowerCase());
+    const persistGalleryState=()=>{savedState={query:search.value,filter,scrollY:scrollY,rendered};sessionStorage.setItem(stateKey,JSON.stringify(savedState))};
+    const updateStatus=renderMs=>{empty.hidden=matches.length!==0;sentinel.hidden=rendered>=matches.length;status.textContent=rendered+' rendered · '+matches.length+' matching · '+galleryEntries.length+' total';buttons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.galleryFilter===filter)));persistGalleryState();rememberPerformance(renderMs)};
+    const renderBatch=(target=rendered+batchSize)=>{const started=performance.now(),fragment=document.createDocumentFragment(),limit=Math.min(matches.length,target);while(rendered<limit){const match=matches[rendered++];fragment.append(createGalleryCard(match.entry,match.index))}galleryItems.insertBefore(fragment,empty);updateStatus(performance.now()-started)};
+    const resetCards=()=>{galleryItems.querySelectorAll(':scope > .media-card-shell,:scope > .media-card').forEach(node=>node.remove());rendered=0};
+    const syncGalleryFilter=()=>{const started=performance.now(),query=search.value.trim().toLocaleLowerCase();matches=[];galleryEntries.forEach((entry,index)=>{const playlist=entry.kind==='playlist',audio=entry.kind==='audio'||entry.kind==='downloading-audio',downloading=entry.kind.startsWith('downloading'),kindMatches=filter==='all'||filter==='playlists'&&playlist||filter==='audio'&&audio||filter==='video'&&!playlist&&!audio||filter==='downloading'&&downloading;if(kindMatches&&(!query||entry.searchText.includes(query)))matches.push({entry,index})});resetCards();renderBatch(Math.max(batchSize,Math.min(Number(savedState.rendered)||0,matches.length)));updateStatus(performance.now()-started)};
     let filterFrame=0;const scheduleGalleryFilter=()=>{if(filterFrame)return;filterFrame=requestAnimationFrame(()=>{filterFrame=0;syncGalleryFilter()})};
     search.addEventListener('input',scheduleGalleryFilter);buttons.forEach(button=>button.addEventListener('click',()=>{filter=button.dataset.galleryFilter;syncGalleryFilter()}));
+    const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))renderBatch()},{rootMargin:'700px 0px'});observer.observe(sentinel);
     addEventListener('pagehide',persistGalleryState);syncGalleryFilter();if(restoreY>0)requestAnimationFrame(()=>requestAnimationFrame(()=>scrollTo({top:restoreY,behavior:'auto'})));
   }
-
-  const updateQuickActions=state=>{
-    const jobs=new Map((state.jobs||[]).map(job=>[job.filename,job]));
-    document.querySelectorAll('.media-card-shell').forEach(shell=>{
-      const card=shell.querySelector('.media-card');const filename=decodeURIComponent(card.getAttribute('href').slice(7));const job=jobs.get(filename);const nav=shell.querySelector('.card-popover nav');
-      if(!job||!job.source||nav.querySelector('[data-source]'))return;
-      const source=document.createElement('a');source.dataset.source='true';source.href=job.source;source.textContent='Open source';
-      const quality=document.createElement('a');quality.dataset.source='true';quality.href='/discover?source='+encodeURIComponent(job.source);quality.textContent='Choose another quality';
-      nav.insertBefore(source,nav.lastElementChild);nav.insertBefore(quality,nav.lastElementChild);
-    });
-  };
   const updateActivityBadge=state=>{
     const badge=document.querySelector('#activity-count');if(!badge)return;const count=Number(state.activityActive||0)+Number(state.activityIssues||0);badge.hidden=count<=0;badge.textContent=String(count);
   };
@@ -922,7 +1286,7 @@ const PLAYBACK_SCRIPT: &str = r#"(()=>{
   let stateRefreshPending=false;
   const refreshState=()=>{
     if(stateRefreshPending)return;stateRefreshPending=true;
-    fetchState().then(state=>{if(state){updateQuickActions(state);updateQueueMini(state);updateActivityBadge(state)}}).finally(()=>stateRefreshPending=false);
+    fetchState().then(state=>{if(state){stateCache=state;updateQueueMini(state);updateActivityBadge(state)}}).finally(()=>stateRefreshPending=false);
   };
   addEventListener('rustdl:state',event=>{if(['queue','peer','activity','sync'].includes(event.detail?.type))refreshState()});
   refreshState();setInterval(()=>{if(!document.hidden)refreshState()},15000);
@@ -1133,6 +1497,8 @@ static DELETE_HOOK: OnceLock<DeleteHook> = OnceLock::new();
 static MUX_HOOK: OnceLock<MuxHook> = OnceLock::new();
 static EXTRACT_AUDIO_HOOK: OnceLock<ExtractAudioHook> = OnceLock::new();
 static THUMBNAIL_HOOK: OnceLock<ThumbnailHook> = OnceLock::new();
+static THUMBNAIL_QUEUE: OnceLock<SyncSender<ThumbnailTask>> = OnceLock::new();
+static THUMBNAIL_PENDING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static INSPECTION_MODE: OnceLock<bool> = OnceLock::new();
 static DOWNLOAD_JOBS: OnceLock<Mutex<HashMap<String, DownloadJob>>> = OnceLock::new();
 static QUEUE_OUTPUT_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -1149,6 +1515,16 @@ static PEER_SEND_JOBS: OnceLock<Mutex<HashMap<String, PeerSendJob>>> = OnceLock:
 static PEER_RECEIVE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static FINGERPRINT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static RUNTIME_TUNING: OnceLock<Mutex<RuntimeTuning>> = OnceLock::new();
+static GALLERY_LISTING_CACHE: OnceLock<Mutex<HashMap<PathBuf, GalleryListingCache>>> =
+    OnceLock::new();
+static PLAYLIST_MEMBERSHIP_CACHE: OnceLock<Mutex<HashMap<PathBuf, PlaylistMembershipCache>>> =
+    OnceLock::new();
+static GALLERY_RENDER_COUNT: AtomicU64 = AtomicU64::new(0);
+static GALLERY_RENDER_MICROS: AtomicU64 = AtomicU64::new(0);
+static GALLERY_LAST_ITEMS: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_QUEUE_DROPS: AtomicU64 = AtomicU64::new(0);
 static ACTION_TOKEN: OnceLock<String> = OnceLock::new();
 static PEER_SERVER_STARTED: Once = Once::new();
 static PEER_PORT: OnceLock<u16> = OnceLock::new();
@@ -1157,6 +1533,34 @@ const MAX_PLAYLIST_PAGES: usize = 50;
 const MAX_PLAYLIST_SELECTIONS: usize = 50;
 const PEER_CHUNK_BYTES: usize = 1024 * 1024;
 const PEER_PAIRING_SECONDS: u64 = 10 * 60;
+const GALLERY_INITIAL_ITEMS: usize = 32;
+const THUMBNAIL_QUEUE_CAPACITY: usize = 16;
+const THUMBNAIL_WORKERS: usize = 2;
+
+#[derive(Debug)]
+struct ThumbnailTask {
+    source: PathBuf,
+    filename: String,
+}
+
+#[derive(Clone, Debug)]
+struct GalleryListingCache {
+    checked: Instant,
+    directory_modified_nanos: Option<u128>,
+    filenames: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FileStamp {
+    len: u64,
+    modified_nanos: u128,
+}
+
+#[derive(Clone, Debug)]
+struct PlaylistMembershipCache {
+    stamp: Option<FileStamp>,
+    memberships: HashMap<String, PlaylistMembership>,
+}
 
 #[derive(Clone, Copy, Debug)]
 struct RuntimeTuning {
@@ -1693,6 +2097,9 @@ fn handle_request(
     if method == Method::Post && parsed.path() == "/peers/send/paired" && !inspection_mode() {
         return respond_peer_send_paired_post(request, client, output_dir);
     }
+    if method == Method::Post && parsed.path() == "/__app/watchlist" && !inspection_mode() {
+        return respond_watchlist_action(request, output_dir);
+    }
     if method != Method::Get {
         return respond_text(request, 405, "Method not allowed");
     }
@@ -1716,6 +2123,17 @@ fn handle_request(
             respond_app_state(request, output_dir, filename.as_deref())
         }
         path if path == view_transition_script_path() => respond_view_transition_script(request),
+        path if path == appearance_script_path() => respond_immutable_asset(
+            request,
+            APPEARANCE_SCRIPT,
+            "application/javascript; charset=utf-8",
+        ),
+        path if path == dark_space_background_path() => {
+            respond_immutable_binary_asset(request, DARK_SPACE_BACKGROUND, "image/png")
+        }
+        path if path == appearance_css_path() => {
+            respond_immutable_asset(request, appearance_css(), "text/css; charset=utf-8")
+        }
         path if path == playback_script_path() && !inspection_mode() => {
             respond_playback_script(request)
         }
@@ -1724,6 +2142,31 @@ fn handle_request(
         }
         path if path == player_css_path() => {
             respond_immutable_asset(request, PLAYER_CSS, "text/css; charset=utf-8")
+        }
+        "/__app/gallery-metrics.json" if !inspection_mode() => respond_gallery_metrics(request),
+        "/__app/playback-order.json" if !inspection_mode() => {
+            respond_playback_order(request, output_dir)
+        }
+        "/__app/stream-manifest.json" if !inspection_mode() => {
+            let watch_url = parsed
+                .query_pairs()
+                .find(|(key, _)| key == "url")
+                .map(|(_, value)| value.into_owned());
+            let episode = parsed
+                .query_pairs()
+                .find(|(key, _)| key == "episode")
+                .map(|(_, value)| value.into_owned());
+            let refresh = parsed
+                .query_pairs()
+                .any(|(key, value)| key == "refresh" && value == "1");
+            respond_stream_manifest(
+                request,
+                client,
+                output_dir,
+                watch_url.as_deref(),
+                episode.as_deref(),
+                refresh,
+            )
         }
         "/__inspect/result" if inspection_mode() => {
             respond_inspection_page(request, InspectionScreen::Result)
@@ -1739,7 +2182,7 @@ fn handle_request(
             respond_thumbnail(request, output_dir, &path[11..])
         }
         "/" => {
-            let response = Response::from_string(render_index(output_dir)?)
+            let response = Response::from_string(decorate_app_html(render_index(output_dir)?))
                 .with_status_code(StatusCode(200))
                 .with_header(header("Content-Type", "text/html; charset=utf-8"))
                 .with_header(html_csp())
@@ -1752,11 +2195,14 @@ fn handle_request(
             if !valid_youtube_playlist_id(playlist_id) {
                 return respond_text(request, 404, "Playlist folder not found");
             }
-            let response = Response::from_string(render_index_view(output_dir, Some(playlist_id))?)
-                .with_status_code(StatusCode(200))
-                .with_header(header("Content-Type", "text/html; charset=utf-8"))
-                .with_header(html_csp())
-                .with_header(header("X-Content-Type-Options", "nosniff"));
+            let response = Response::from_string(decorate_app_html(render_index_view(
+                output_dir,
+                Some(playlist_id),
+            )?))
+            .with_status_code(StatusCode(200))
+            .with_header(header("Content-Type", "text/html; charset=utf-8"))
+            .with_header(html_csp())
+            .with_header(header("X-Content-Type-Options", "nosniff"));
             request.respond(response)?;
             Ok(())
         }
@@ -1764,6 +2210,39 @@ fn handle_request(
         "/diagnostics" if !inspection_mode() => respond_diagnostics_page(request),
         "/settings" if !inspection_mode() => respond_settings_page(request),
         "/changelog" => respond_changelog_page(request),
+        "/streaming" if !inspection_mode() => {
+            let page = parsed
+                .query_pairs()
+                .find(|(key, _)| key == "page")
+                .and_then(|(_, value)| value.parse::<u16>().ok())
+                .unwrap_or(1);
+            let section = parsed
+                .query_pairs()
+                .find(|(key, _)| key == "section")
+                .map(|(_, value)| value.into_owned());
+            let query = parsed
+                .query_pairs()
+                .find(|(key, _)| key == "q")
+                .map(|(_, value)| value.into_owned());
+            let view =
+                match aniwaves::CatalogView::from_params(section.as_deref(), query.as_deref()) {
+                    Ok(view) => view,
+                    Err(error) => return respond_text(request, 400, error),
+                };
+            let refresh = parsed
+                .query_pairs()
+                .any(|(key, value)| key == "refresh" && value == "1");
+            respond_aniwaves_catalog_page(request, client, output_dir, view, page, refresh)
+        }
+        "/streaming/watchlist" if !inspection_mode() => {
+            respond_streaming_watchlist_page(request, output_dir)
+        }
+        "/streaming/calendar" if !inspection_mode() => {
+            let refresh = parsed
+                .query_pairs()
+                .any(|(key, value)| key == "refresh" && value == "1");
+            respond_streaming_calendar_page(request, client, output_dir, refresh)
+        }
         "/peers/refresh" if !inspection_mode() => {
             respond_peer_pairing_refresh(request, args_peer_port())
         }
@@ -1816,6 +2295,16 @@ fn handle_request(
             let Some(submitted) = submitted.filter(|value| !value.trim().is_empty()) else {
                 return respond_text(request, 400, "Missing video link");
             };
+            if let Some(target) = aniwaves::catalog_target_from_text(&submitted) {
+                return respond_aniwaves_catalog_page(
+                    request,
+                    client,
+                    output_dir,
+                    target.view,
+                    target.page,
+                    false,
+                );
+            }
             let sources = extract_supported_urls(&submitted);
             if let Some(playlist_id) = sources
                 .iter()
@@ -1928,18 +2417,75 @@ struct PlaylistGalleryGroup {
     total: usize,
 }
 
-fn render_index_view(output_dir: &Path, selected_playlist: Option<&str>) -> io::Result<String> {
-    let mut filenames = Vec::new();
-    if !inspection_mode() && output_dir.is_dir() {
-        for entry in fs::read_dir(output_dir)? {
-            let entry = entry?;
-            let filename = entry.file_name().to_string_lossy().into_owned();
-            if entry.file_type()?.is_file() && valid_video_filename(&filename) {
-                filenames.push(filename);
-            }
-        }
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GalleryEntry {
+    href: String,
+    filename: Option<String>,
+    state: String,
+    title: String,
+    subtitle: String,
+    kind: String,
+    thumbnail: Option<String>,
+    transition_name: Option<String>,
+}
+
+fn safe_script_json<T: Serialize>(value: &T) -> io::Result<String> {
+    serde_json::to_string(value)
+        .map(|json| {
+            json.replace('<', "\\u003c")
+                .replace('>', "\\u003e")
+                .replace('&', "\\u0026")
+        })
+        .map_err(io::Error::other)
+}
+
+fn render_gallery_entry(entry: &GalleryEntry, index: usize) -> String {
+    let mut classes = "media-card".to_owned();
+    match entry.kind.as_str() {
+        "playlist" => classes.push_str(" collection-folder"),
+        "audio" => classes.push_str(" audio"),
+        "downloading" => classes.push_str(" downloading"),
+        "downloading-audio" => classes.push_str(" downloading audio"),
+        _ => {}
     }
-    filenames.sort_unstable_by(|left, right| right.cmp(left));
+    let thumbnail = entry.thumbnail.as_ref().map_or_else(String::new, |filename| {
+        format!(
+            r#"<img class="media-art" src="/thumbnail/{}.jpg" loading="lazy" decoding="async" data-thumbnail-retry="0" alt="">"#,
+            escape_html(filename)
+        )
+    });
+    let transition = entry
+        .transition_name
+        .as_ref()
+        .map_or_else(String::new, |name| {
+            format!(r#" data-view-transition-name="{}""#, escape_html(name))
+        });
+    let card = format!(
+        r#"<a class="{classes}" href="{}" data-gallery-index="{index}" data-gallery-kind="{}"><div class="media-thumb"{transition}>{thumbnail}</div><div class="media-info"><span class="media-state">{}</span><span class="media-title">{}</span><span class="media-file">{}</span></div></a>"#,
+        escape_html(&entry.href),
+        escape_html(&entry.kind),
+        escape_html(&entry.state),
+        escape_html(&entry.title),
+        escape_html(&entry.subtitle),
+    );
+    if entry.filename.is_some() {
+        format!(
+            r#"<div class="media-card-shell">{card}<button class="card-menu-button" type="button" aria-label="Media actions">•••</button></div>"#
+        )
+    } else {
+        card
+    }
+}
+
+fn render_index_view(output_dir: &Path, selected_playlist: Option<&str>) -> io::Result<String> {
+    let render_started = Instant::now();
+    let mut filenames = if inspection_mode() {
+        Vec::new()
+    } else {
+        load_gallery_filenames(output_dir)?
+    };
+    let ready_filenames = filenames.iter().cloned().collect::<HashSet<_>>();
     let mut active = if inspection_mode() {
         Vec::new()
     } else {
@@ -1957,7 +2503,9 @@ fn render_index_view(output_dir: &Path, selected_playlist: Option<&str>) -> io::
                 )
             })
             .map(|(filename, _)| filename.clone())
-            .filter(|filename| valid_video_filename(filename) && !filenames.contains(filename))
+            .filter(|filename| {
+                valid_video_filename(filename) && !ready_filenames.contains(filename)
+            })
             .collect::<Vec<_>>()
     };
     active.sort_unstable_by(|left, right| right.cmp(left));
@@ -1967,7 +2515,7 @@ fn render_index_view(output_dir: &Path, selected_playlist: Option<&str>) -> io::
     } else {
         load_playlist_memberships(output_dir)?
     };
-    let mut folder_cards = String::new();
+    let mut folder_entries = Vec::<GalleryEntry>::new();
     let mut collection_nav = String::new();
     let mut library_title = "Your gallery".to_owned();
     let mut library_summary = format!("{item_count} media items");
@@ -2010,7 +2558,7 @@ fn render_index_view(output_dir: &Path, selected_playlist: Option<&str>) -> io::
             group.title = membership.title.clone();
             group.total = group.total.max(membership.total);
             group.members.push(filename.clone());
-            if filenames.contains(filename) {
+            if ready_filenames.contains(filename) {
                 group.ready.push(filename.clone());
             } else {
                 group.downloading += 1;
@@ -2030,29 +2578,37 @@ fn render_index_view(output_dir: &Path, selected_playlist: Option<&str>) -> io::
                 .to_lowercase()
                 .cmp(&right.1.title.to_lowercase())
         });
-        folder_cards = groups
+        folder_entries = groups
             .into_iter()
             .map(|(playlist_id, mut group)| {
                 group.members.sort_by_key(|filename| {
-                    memberships.get(filename).map_or(usize::MAX, |value| value.position)
+                    memberships
+                        .get(filename)
+                        .map_or(usize::MAX, |value| value.position)
                 });
-                let art = group
+                let thumbnail = group
                     .members
                     .iter()
-                    .find(|filename| group.ready.contains(filename) && !is_audio_filename(filename))
-                    .map_or_else(String::new, |filename| {
-                        format!(r#"<img class="media-art" src="/thumbnail/{filename}.jpg" loading="lazy" decoding="async" alt="">"#)
-                    });
+                    .find(|filename| {
+                        ready_filenames.contains(*filename) && !is_audio_filename(filename)
+                    })
+                    .cloned();
                 let saved = group.ready.len();
                 let progress = if group.downloading == 0 {
                     format!("{saved} saved of {}", group.total.max(saved))
                 } else {
                     format!("{saved} saved · {} downloading", group.downloading)
                 };
-                format!(
-                    r#"<a class="media-card collection-folder" href="/gallery/playlist/{playlist_id}"><div class="media-thumb">{art}</div><div class="media-info"><span class="media-state">Playlist folder</span><span class="media-title">{}</span><span class="media-file">{progress}</span></div></a>"#,
-                    escape_html(&group.title)
-                )
+                GalleryEntry {
+                    href: format!("/gallery/playlist/{playlist_id}"),
+                    filename: None,
+                    state: "Playlist folder".to_owned(),
+                    title: group.title,
+                    subtitle: progress,
+                    kind: "playlist".to_owned(),
+                    thumbnail,
+                    transition_name: None,
+                }
             })
             .collect();
         library_summary = if folder_count == 0 {
@@ -2063,41 +2619,51 @@ fn render_index_view(output_dir: &Path, selected_playlist: Option<&str>) -> io::
     }
     let library = if inspection_mode() {
         r#"<section class="library"><div class="library-head"><h2>Synthetic gallery</h2><span class="library-count">2 previews</span></div><div class="gallery"><div class="media-card-shell"><a class="media-card downloading" href="/__inspect/result"><div class="media-thumb" style="view-transition-name:video-synthetic-download"><img class="media-art" src="/__inspect/poster.svg" alt=""></div><div class="media-info"><span class="media-state">Downloading</span><span class="media-title">Progressive stream</span><span class="media-file">synthetic-download.mp4</span></div></a><button class="card-menu-button" type="button" aria-label="Synthetic actions">•••</button></div><div class="media-card-shell"><a class="media-card" href="/__inspect/player"><div class="media-thumb" style="view-transition-name:video-synthetic-preview"><img class="media-art" src="/__inspect/poster.svg" alt=""></div><div class="media-info"><span class="media-state">Ready</span><span class="media-title">Video player</span><span class="media-file">synthetic-preview.mp4</span></div></a><button class="card-menu-button" type="button" aria-label="Synthetic actions">•••</button></div></div></section>"#.to_owned()
-    } else if filenames.is_empty() && active.is_empty() && folder_cards.is_empty() {
+    } else if filenames.is_empty() && active.is_empty() && folder_entries.is_empty() {
         String::new()
     } else {
-        let downloading_cards = active
-            .iter()
-            .map(|filename| {
-                let transition_name = view_transition_name(filename);
-                let kind = if is_audio_filename(filename) { " audio" } else { "" };
-                format!(
-                    r#"<a class="media-card downloading{kind}" href="/watch/{filename}"><div class="media-thumb" style="view-transition-name:{transition_name}"></div><div class="media-info"><span class="media-state">Downloading</span><span class="media-title">Stream while saving</span><span class="media-file">{}</span></div></a>"#,
-                    escape_html(filename)
-                )
-            })
-            .collect::<String>();
-        let ready_cards = filenames
-            .iter()
-            .map(|filename| {
-                let transition_name = view_transition_name(filename);
-                let (kind, art, title) = if is_audio_filename(filename) {
-                    (" audio", String::new(), "Open audio player")
+        let mut gallery_entries = folder_entries;
+        gallery_entries.extend(active.iter().map(|filename| GalleryEntry {
+            href: format!("/watch/{filename}"),
+            filename: Some(filename.clone()),
+            state: "Downloading".to_owned(),
+            title: "Stream while saving".to_owned(),
+            subtitle: filename.clone(),
+            kind: if is_audio_filename(filename) {
+                "downloading-audio".to_owned()
+            } else {
+                "downloading".to_owned()
+            },
+            thumbnail: None,
+            transition_name: Some(view_transition_name(filename)),
+        }));
+        gallery_entries.extend(filenames.iter().map(|filename| {
+            let audio = is_audio_filename(filename);
+            GalleryEntry {
+                href: format!("/watch/{filename}"),
+                filename: Some(filename.clone()),
+                state: "Ready".to_owned(),
+                title: if audio {
+                    "Open audio player"
                 } else {
-                    (
-                        "",
-                        format!(r#"<img class="media-art" src="/thumbnail/{filename}.jpg" loading="lazy" decoding="async" alt="">"#),
-                        "Open player",
-                    )
-                };
-                format!(
-                    r#"<a class="media-card{kind}" href="/watch/{filename}"><div class="media-thumb" style="view-transition-name:{transition_name}">{art}</div><div class="media-info"><span class="media-state">Ready</span><span class="media-title">{title}</span><span class="media-file">{}</span></div></a>"#,
-                    escape_html(filename)
-                )
-            })
+                    "Open player"
+                }
+                .to_owned(),
+                subtitle: filename.clone(),
+                kind: if audio { "audio" } else { "video" }.to_owned(),
+                thumbnail: (!audio).then(|| filename.clone()),
+                transition_name: Some(view_transition_name(filename)),
+            }
+        }));
+        let initial_cards = gallery_entries
+            .iter()
+            .take(GALLERY_INITIAL_ITEMS)
+            .enumerate()
+            .map(|(index, entry)| render_gallery_entry(entry, index))
             .collect::<String>();
+        let gallery_json = safe_script_json(&gallery_entries)?;
         format!(
-            r#"<section class="library" id="gallery-library">{collection_nav}<div class="library-head"><h2>{}</h2><span class="library-count">{library_summary}</span></div><div class="gallery-tools"><input class="gallery-search" type="search" placeholder="Search gallery or playlists" aria-label="Search gallery" autocomplete="off"><div class="gallery-filters" aria-label="Gallery filters"><button type="button" data-gallery-filter="all" aria-pressed="true">All</button><button type="button" data-gallery-filter="playlists" aria-pressed="false">Playlists</button><button type="button" data-gallery-filter="video" aria-pressed="false">Video</button><button type="button" data-gallery-filter="audio" aria-pressed="false">Audio</button><button type="button" data-gallery-filter="downloading" aria-pressed="false">Downloading</button></div><span class="gallery-filter-status" aria-live="polite"></span></div><div class="gallery" id="gallery-items">{folder_cards}{downloading_cards}{ready_cards}<p class="gallery-empty" id="gallery-empty" hidden>No gallery items match this search.</p></div></section>"#,
+            r#"<section class="library" id="gallery-library">{collection_nav}<div class="library-head"><h2>{}</h2><span class="library-count">{library_summary}</span></div><div class="gallery-tools"><input class="gallery-search" type="search" placeholder="Search gallery or playlists" aria-label="Search gallery" autocomplete="off"><div class="gallery-filters" aria-label="Gallery filters"><button type="button" data-gallery-filter="all" aria-pressed="true">All</button><button type="button" data-gallery-filter="playlists" aria-pressed="false">Playlists</button><button type="button" data-gallery-filter="video" aria-pressed="false">Video</button><button type="button" data-gallery-filter="audio" aria-pressed="false">Audio</button><button type="button" data-gallery-filter="downloading" aria-pressed="false">Downloading</button></div><span class="gallery-filter-status" aria-live="polite"></span><span class="playback-queue-status" aria-live="polite">Up Next · empty</span></div><div class="gallery" id="gallery-items">{initial_cards}<p class="gallery-empty" id="gallery-empty" hidden>No gallery items match this search.</p><span class="gallery-sentinel" id="gallery-sentinel" aria-hidden="true"></span></div><script type="application/json" id="gallery-data">{gallery_json}</script></section>"#,
             escape_html(&library_title)
         )
     };
@@ -2149,6 +2715,17 @@ fn render_index_view(output_dir: &Path, selected_playlist: Option<&str>) -> io::
             "</main>",
             r#"</main><aside class="queue-mini" aria-label="Synthetic download queue"><a href="/__inspect/result">↓</a><div class="queue-mini-info"><strong>synthetic-download.mp4</strong><span>downloading · 26.0 MB / 64.0 MB</span><div class="queue-mini-progress"><i style="width:41%"></i></div></div><button type="button">Pause</button></aside>"#,
         );
+    }
+    if !inspection_mode() {
+        GALLERY_RENDER_COUNT.fetch_add(1, Ordering::Relaxed);
+        GALLERY_RENDER_MICROS.store(
+            render_started
+                .elapsed()
+                .as_micros()
+                .min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+        GALLERY_LAST_ITEMS.store(item_count as u64, Ordering::Relaxed);
     }
     Ok(html)
 }
@@ -2448,7 +3025,7 @@ fn respond_peer_send_state(request: Request) -> Result<(), Box<dyn Error>> {
 }
 
 fn respond_html(request: Request, body: String) -> Result<(), Box<dyn Error>> {
-    let response = Response::from_string(body)
+    let response = Response::from_string(decorate_app_html(body))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -2984,6 +3561,88 @@ fn respond_peer_status(request: Request, status: PeerStatus) -> Result<(), Box<d
 
 const CHANGELOG: &[(&str, &[&str])] = &[
     (
+        "0.1.43",
+        &[
+            "Fixed instant streaming bookmarks by preventing the action field from shadowing the form endpoint in JavaScript.",
+            "Fixed watchlist removal counts and the transition into the empty-library state on older WebViews.",
+            "Added regression coverage for both streaming bookmark form handlers.",
+        ],
+    ),
+    (
+        "0.1.42",
+        &[
+            "Added a persistent APK-local streaming watchlist with instant catalog controls and a native player save action.",
+            "Added a release calendar that groups saved shows by their known episode day and flags changes since the previous successful check.",
+            "Added precise episode timestamps, bounded four-worker schedule refreshes, five-minute caching, and fail-safe per-show seen markers.",
+        ],
+    ),
+    (
+        "0.1.41",
+        &[
+            "Added a native all-episodes selector to the protected streaming player header.",
+            "Included episode titles in the dropdown while keeping a compact episode number during playback.",
+            "Kept previous and next episode shortcuts and prevented overlapping manifest loads during direct selection.",
+        ],
+    ),
+    (
+        "0.1.40",
+        &[
+            "Expanded streaming discovery beyond Newest with Updated, Ongoing, and Added browse feeds.",
+            "Replaced current-page title filtering with Rust-backed full-library AniWaves search and paginated results.",
+            "Added direct handling for AniWaves home, browse, and search links while keeping playback isolated and redirect-safe.",
+        ],
+    ),
+    (
+        "0.1.39",
+        &[
+            "Made redirect permissions source-specific, so one provider can never expand another provider’s allowed hosts.",
+            "Added All, SUB, DUB, Ready, and Issues filters above the protected player with live source counts.",
+            "Made automatic failover respect the active source filter and exposed each provider’s health or checked-redirect state.",
+        ],
+    ),
+    (
+        "0.1.38",
+        &[
+            "Blocked every script-driven and HTTP redirect from local app pages to external sites while preserving deliberate user taps.",
+            "Locked the isolated streaming WebView to the exact provider host selected by Rust, with no temporary cross-host redirect window.",
+            "Moved legitimate provider redirect resolution into Rust health checks so known final player hosts open directly and safely.",
+        ],
+    ),
+    (
+        "0.1.37",
+        &[
+            "Replaced full AniWaves watch-page playback with an isolated RustDL player that opens only the selected provider embed.",
+            "Added episode-scoped primary and backup discovery across Vidplay, BYFMS, DGHG, DatSaV, MyCloud, and newly returned server labels.",
+            "Added concurrent Rust health checks, two-minute manifests, native SUB/DUB source controls, episode navigation, and automatic failover.",
+        ],
+    ),
+    (
+        "0.1.36",
+        &[
+            "Added a persistent Up Next playback queue with add/remove actions on every gallery media card.",
+            "Added Next controls to the full player and mini-player, plus Android media-session and keyboard navigation.",
+            "Added a Rust-backed gallery fallback order, queue count, stale-item cleanup, and one-tap queue clearing.",
+        ],
+    ),
+    (
+        "0.1.35",
+        &[
+            "Added persistent system, dark, and light appearance modes across every Rust-generated app page.",
+            "Added a quick light/dark switch with smooth no-layout theme transitions and matching Android system bars.",
+            "Added a drifting space background built from transform-only star fields that pauses while hidden and respects reduced motion.",
+            "Added an APK-local space-effect switch and synchronized appearance through the gallery mini-player.",
+            "Polished light mode across gallery controls, forms, queues, diagnostics, settings, changelog, and device-transfer surfaces.",
+            "Centralized dark and light appearance into shared semantic root variables instead of separate component color patches.",
+            "Added an original APK-bundled cosmic backdrop for a richer dark theme without network-loaded artwork.",
+            "Added isolated AniWaves streaming with no download interception, privileged app bridges, popups, permissions, or external redirects.",
+            "Added a Rust-rendered YouTube-style AniWaves newest catalog with lazy poster cards, instant search, pagination, caching, and one-tap protected playback.",
+            "Made large galleries incremental with a bounded 32-card DOM window, visible-ahead loading, and global in-memory search.",
+            "Replaced hundreds of per-card popovers with one reusable action sheet and moved shared-thumbnail transitions onto the selected card only.",
+            "Added cached Rust gallery metadata, constant-time membership lookups, and a two-worker thumbnail queue with lightweight 480px previews.",
+            "Added privacy-safe gallery timing, DOM, thumbnail-cache, and long-task counters to Diagnostics.",
+        ],
+    ),
+    (
         "0.1.34",
         &[
             "Added a persistent mini-player that keeps the current media alive while browsing the gallery and app pages.",
@@ -3261,6 +3920,24 @@ const CHANGELOG: &[(&str, &[&str])] = &[
 
 fn changelog_destinations(version: &str) -> &'static [(&'static str, &'static str)] {
     match version {
+        "0.1.43" => &[
+            ("/streaming", "Streaming bookmarks"),
+            ("/streaming/watchlist", "Watchlist"),
+        ],
+        "0.1.42" => &[
+            ("/streaming/watchlist", "Streaming watchlist"),
+            ("/streaming/calendar", "Release calendar"),
+        ],
+        "0.1.41" => &[("/streaming", "Episode selector")],
+        "0.1.40" => &[("/streaming", "Browse feeds & full-library search")],
+        "0.1.39" => &[("/streaming", "Source filters & isolated redirects")],
+        "0.1.38" => &[("/streaming", "Redirect-safe streaming")],
+        "0.1.37" => &[("/streaming", "Streaming catalog & source player")],
+        "0.1.36" => &[("/#gallery-library", "Up Next queue & player")],
+        "0.1.35" => &[
+            ("/settings", "Appearance & space effect"),
+            ("/streaming", "AniWaves streaming catalog"),
+        ],
         "0.1.34" => &[("/#gallery-library", "Mini-player & Picture-in-Picture")],
         "0.1.33" => &[("/#gallery-library", "Seek previews")],
         "0.1.32" => &[("/#gallery-library", "Streaming player")],
@@ -3359,12 +4036,14 @@ fn render_diagnostics_page() -> String {
 <article><header><h2>Memory</h2></header><div id="memory" class="value">—</div><p id="memory-sub" class="sub">Reading available RAM…</p><div class="bar"><i id="memory-bar"></i></div></article>
 <article><header><h2>Internal storage</h2></header><div id="storage" class="value">—</div><p id="storage-sub" class="sub">Reading /data…</p><div class="bar"><i id="storage-bar"></i></div></article>
 <article><header><h2>Uptime</h2></header><div id="uptime" class="value">—</div><p id="uptime-sub" class="sub">Since the last boot</p></article>
+<article class="wide"><header><h2>Gallery performance</h2></header><div class="health"><div><strong>Rendered cards</strong><span id="gallery-dom">Not opened yet</span></div><div><strong>Last gallery render</strong><span id="gallery-render">—</span></div><div><strong>Thumbnail cache</strong><span id="gallery-thumbs">—</span></div><div><strong>Browser long tasks</strong><span id="gallery-long-tasks">—</span></div></div><p id="gallery-perf-updated" class="sub" style="margin-top:.8rem">Anonymous counters only · no filenames or media contents</p></article>
 <article class="wide"><header><h2>RustDL health</h2></header><div class="health"><div><strong>Android app process</strong><span id="app-pid">—</span></div><div><strong>Rust backend</strong><span>Bundled · local</span></div></div><p id="updated" class="sub" style="margin-top:.8rem">Waiting for first sample…</p></article>
 <article class="privacy"><strong>Privacy boundary:</strong> this APK-local snapshot contains system totals and RustDL’s process ID only. It excludes logs, notifications, media filenames, Wi-Fi identity, location, other apps, and screen content. Diagnostics are unavailable in inspection mode. RustDL {}</article>
 </section></main><script>
-(()=>{{const bridge=window.RustDLDiagnostics,settings=window.RustDLSettings,$=selector=>document.querySelector(selector);let refreshSeconds=5;try{{if(settings)refreshSeconds=Number(settings.diagnosticsRefreshSeconds())||5}}catch(_error){{refreshSeconds=5}}const refresh=$('#refresh'),copy=$('#copy'),grid=$('#diagnostics-grid');let latest=null,busy=false;const finite=value=>Number.isFinite(Number(value))?Number(value):-1,clamp=value=>Math.max(0,Math.min(100,value)),fixed=(value,digits)=>finite(value)>=0?finite(value).toFixed(digits):'—',bytes=value=>{{value=finite(value);if(value<0)return'Unavailable';const units=['B','KB','MB','GB','TB'];let index=0;while(value>=1024&&index<units.length-1){{value/=1024;index++}}return value.toFixed(index>2?1:0)+' '+units[index]}},duration=seconds=>{{seconds=finite(seconds);if(seconds<0)return'Unavailable';const days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600),minutes=Math.floor(seconds%3600/60);return days?days+'d '+hours+'h':hours?hours+'h '+minutes+'m':minutes+'m'}},thermalNames=['None','Light','Moderate','Severe','Critical','Emergency','Shutdown'],setBar=(id,value)=>$(id).style.width=clamp(value)+'%',setValue=(id,value,available)=>{{const element=$(id);element.textContent=value;element.classList.toggle('unavailable',!available)}};
+(()=>{{const bridge=window.RustDLDiagnostics,settings=window.RustDLSettings,$=selector=>document.querySelector(selector);let refreshSeconds=5;try{{if(settings)refreshSeconds=Number(settings.diagnosticsRefreshSeconds())||5}}catch(_error){{refreshSeconds=5}}const refresh=$('#refresh'),copy=$('#copy'),grid=$('#diagnostics-grid');let latest=null,busy=false;const finite=value=>Number.isFinite(Number(value))?Number(value):-1,clamp=value=>Math.max(0,Math.min(100,value)),fixed=(value,digits)=>finite(value)>=0?finite(value).toFixed(digits):'—',safeParse=value=>{{try{{return JSON.parse(value)}}catch(_error){{return null}}}},bytes=value=>{{value=finite(value);if(value<0)return'Unavailable';const units=['B','KB','MB','GB','TB'];let index=0;while(value>=1024&&index<units.length-1){{value/=1024;index++}}return value.toFixed(index>2?1:0)+' '+units[index]}},duration=seconds=>{{seconds=finite(seconds);if(seconds<0)return'Unavailable';const days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600),minutes=Math.floor(seconds%3600/60);return days?days+'d '+hours+'h':hours?hours+'h '+minutes+'m':minutes+'m'}},thermalNames=['None','Light','Moderate','Severe','Critical','Emergency','Shutdown'],setBar=(id,value)=>$(id).style.width=clamp(value)+'%',setValue=(id,value,available)=>{{const element=$(id);element.textContent=value;element.classList.toggle('unavailable',!available)}};
+const loadGalleryPerformance=async()=>{{const browser=safeParse(sessionStorage.getItem('rustdl:gallery-performance'))||{{}};let backend={{}};try{{const response=await fetch('/__app/gallery-metrics.json',{{cache:'no-store'}});if(response.ok)backend=await response.json()}}catch(_error){{}}const rendered=finite(browser.rendered),matching=finite(browser.matching),renderMicros=finite(backend.lastRenderMicros),hits=finite(backend.thumbnailHits),misses=finite(backend.thumbnailMisses),pending=finite(backend.thumbnailPending);$('#gallery-dom').textContent=rendered>=0?rendered+' of '+(matching>=0?matching:browser.total||0):'Open Gallery to sample';$('#gallery-render').textContent=renderMicros>=0?(renderMicros/1000).toFixed(1)+' ms Rust · '+(finite(browser.renderMs)>=0?finite(browser.renderMs).toFixed(1)+' ms DOM':'DOM —'):'—';$('#gallery-thumbs').textContent=hits>=0&&misses>=0?hits+' hit · '+misses+' miss · '+Math.max(0,pending)+' queued':'—';$('#gallery-long-tasks').textContent=finite(browser.longTasks)>=0?finite(browser.longTasks)+' observed':'Open Gallery to sample';if(browser.updated)$('#gallery-perf-updated').textContent='Last browser sample '+new Date(browser.updated).toLocaleTimeString()+' · anonymous counters only'}};
 const render=data=>{{latest=data;const batteryLevel=finite(data.batteryLevel),temperature=finite(data.batteryTemperatureC),thermalStatus=finite(data.thermalStatus),load1=finite(data.load1),load5=finite(data.load5),load15=finite(data.load15),processors=Math.max(1,finite(data.processors)),memoryTotal=finite(data.memoryTotalBytes),memoryAvailable=finite(data.memoryAvailableBytes),storageTotal=finite(data.storageTotalBytes),storageAvailable=finite(data.storageAvailableBytes),memoryUsed=memoryTotal>0&&memoryAvailable>=0?100*(1-memoryAvailable/memoryTotal):-1,storageUsed=storageTotal>0&&storageAvailable>=0?100*(1-storageAvailable/storageTotal):-1,cpuUsed=load1>=0?100*load1/processors:-1,thermalName=thermalStatus>=0?(thermalNames[thermalStatus]||'Status '+thermalStatus):'Status unavailable';setValue('#battery',batteryLevel>=0?batteryLevel+'%':'Unavailable',batteryLevel>=0);$('#battery-sub').textContent=(data.batteryStatus||'Unknown')+' · '+(temperature>=0?temperature.toFixed(1)+' °C':'temperature unavailable');setBar('#battery-bar',batteryLevel);setValue('#thermal',temperature>=0?temperature.toFixed(1)+' °C':thermalName,temperature>=0||thermalStatus>=0);$('#thermal-sub').textContent=(temperature>=0?'Battery sensor · ':'')+thermalName;setBar('#thermal-bar',temperature>=0?(temperature-20)/30*100:thermalStatus>=0?thermalStatus/6*100:0);setValue('#cpu',load1>=0?load1.toFixed(2):'Unavailable',load1>=0);$('#cpu-sub').textContent=load1>=0?fixed(load1,2)+' / '+fixed(load5,2)+' / '+fixed(load15,2)+' · '+processors+' cores':'Load average restricted by Android';setBar('#cpu-bar',cpuUsed);setValue('#memory',memoryAvailable>=0?bytes(memoryAvailable):'Unavailable',memoryAvailable>=0);$('#memory-sub').textContent=memoryUsed>=0?memoryUsed.toFixed(0)+'% used of '+bytes(memoryTotal):'Memory totals unavailable';setBar('#memory-bar',memoryUsed);setValue('#storage',storageAvailable>=0?bytes(storageAvailable):'Unavailable',storageAvailable>=0);$('#storage-sub').textContent=storageUsed>=0?storageUsed.toFixed(0)+'% used of '+bytes(storageTotal):'Storage totals unavailable';setBar('#storage-bar',storageUsed);setValue('#uptime',duration(data.uptimeSeconds),finite(data.uptimeSeconds)>=0);$('#app-pid').textContent=finite(data.rustdlPid)>0?'PID '+finite(data.rustdlPid):'Unavailable';$('#updated').textContent='Updated '+new Date(data.timestamp).toLocaleTimeString();copy.disabled=false;grid.setAttribute('aria-busy','false')}};
-const load=()=>{{if(busy)return;busy=true;refresh.disabled=true;grid.setAttribute('aria-busy','true');$('#live').textContent='Refreshing…';if(!bridge){{$('#live').textContent='Open inside the installed RustDL app';$('#live').classList.add('offline');grid.setAttribute('aria-busy','false');refresh.disabled=false;busy=false;return}}try{{const response=JSON.parse(bridge.diagnostics());if(!response.ok||!response.data)throw new Error(response.detail||'No diagnostics sample');render(response.data);$('#live').textContent=(response.detail||'Live')+' · updates every '+refreshSeconds+' seconds';$('#live').classList.remove('offline')}}catch(error){{$('#live').textContent='Could not read diagnostics · tap Refresh';$('#live').classList.add('offline');grid.setAttribute('aria-busy','false')}}finally{{refresh.disabled=false;busy=false}}}};refresh.addEventListener('click',load);copy.addEventListener('click',event=>{{if(!latest||!bridge)return;const copied=bridge.copySnapshot(JSON.stringify(latest,null,2));event.currentTarget.textContent=copied?'Copied':'Copy failed';setTimeout(()=>event.currentTarget.textContent='Copy snapshot',1000)}});document.addEventListener('visibilitychange',()=>{{if(!document.hidden)load()}});load();setInterval(()=>{{if(!document.hidden)load()}},refreshSeconds*1000)}})();
+const load=()=>{{if(busy)return;busy=true;refresh.disabled=true;grid.setAttribute('aria-busy','true');$('#live').textContent='Refreshing…';loadGalleryPerformance();if(!bridge){{$('#live').textContent='Open inside the installed RustDL app';$('#live').classList.add('offline');grid.setAttribute('aria-busy','false');refresh.disabled=false;busy=false;return}}try{{const response=JSON.parse(bridge.diagnostics());if(!response.ok||!response.data)throw new Error(response.detail||'No diagnostics sample');render(response.data);$('#live').textContent=(response.detail||'Live')+' · updates every '+refreshSeconds+' seconds';$('#live').classList.remove('offline')}}catch(error){{$('#live').textContent='Could not read diagnostics · tap Refresh';$('#live').classList.add('offline');grid.setAttribute('aria-busy','false')}}finally{{refresh.disabled=false;busy=false}}}};refresh.addEventListener('click',load);copy.addEventListener('click',event=>{{if(!latest||!bridge)return;const copied=bridge.copySnapshot(JSON.stringify(latest,null,2));event.currentTarget.textContent=copied?'Copied':'Copy failed';setTimeout(()=>event.currentTarget.textContent='Copy snapshot',1000)}});document.addEventListener('visibilitychange',()=>{{if(!document.hidden)load()}});load();setInterval(()=>{{if(!document.hidden)load()}},refreshSeconds*1000)}})();
 </script>{}</body></html>"#,
         env!("CARGO_PKG_VERSION"),
         dev_reload_script()
@@ -3372,7 +4051,7 @@ const load=()=>{{if(busy)return;busy=true;refresh.disabled=true;grid.setAttribut
 }
 
 fn respond_settings_page(request: Request) -> Result<(), Box<dyn Error>> {
-    let response = Response::from_string(settings::render(&dev_reload_script()))
+    let response = Response::from_string(decorate_app_html(settings::render(&dev_reload_script())))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -3383,7 +4062,7 @@ fn respond_settings_page(request: Request) -> Result<(), Box<dyn Error>> {
 }
 
 fn respond_diagnostics_page(request: Request) -> Result<(), Box<dyn Error>> {
-    let response = Response::from_string(render_diagnostics_page())
+    let response = Response::from_string(decorate_app_html(render_diagnostics_page()))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -3393,8 +4072,211 @@ fn respond_diagnostics_page(request: Request) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn respond_aniwaves_catalog_page(
+    request: Request,
+    client: &Client,
+    state_dir: &Path,
+    view: aniwaves::CatalogView,
+    page: u16,
+    refresh: bool,
+) -> Result<(), Box<dyn Error>> {
+    let library = streaming_library::load(state_dir)?;
+    let watchlisted = streaming_library::urls(&library.entries);
+    let html = match aniwaves::load_catalog(client, view.clone(), page, refresh) {
+        Ok(catalog) => aniwaves::render_catalog(&catalog, &watchlisted, action_token()),
+        Err(error) => aniwaves::render_error(&error.to_string(), &view),
+    };
+    let response = Response::from_string(decorate_app_html(html))
+        .with_status_code(StatusCode(200))
+        .with_header(header("Content-Type", "text/html; charset=utf-8"))
+        .with_header(header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' https://static.aniwaves.ru; connect-src 'self'; form-action 'self'; base-uri 'none'",
+        ))
+        .with_header(header("Cache-Control", "no-store"))
+        .with_header(header("X-Content-Type-Options", "nosniff"));
+    request.respond(response)?;
+    Ok(())
+}
+
+fn respond_watchlist_action(mut request: Request, state_dir: &Path) -> Result<(), Box<dyn Error>> {
+    let mut body = String::new();
+    request
+        .as_reader()
+        .take(32 * 1024)
+        .read_to_string(&mut body)?;
+    let form = Url::parse(&format!("http://localhost/?{body}"))?;
+    let value = |key: &str| {
+        form.query_pairs()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.into_owned())
+    };
+    let wants_json = value("response").as_deref() == Some("json");
+    if value("token").as_deref() != Some(action_token()) {
+        return respond_text(request, 403, "Watchlist action expired");
+    }
+    let action = value("action").unwrap_or_default();
+    let watch_url = value("url").unwrap_or_default();
+    let result = match action.as_str() {
+        "remove" => streaming_library::remove(state_dir, &watch_url),
+        "add" => {
+            let title = value("title").unwrap_or_default();
+            let poster = value("poster");
+            let sub = value("sub");
+            let dub = value("dub");
+            let total = value("total");
+            let media_type = value("type");
+            streaming_library::WatchlistInput::validated(
+                &title,
+                &watch_url,
+                poster.as_deref(),
+                sub.as_deref(),
+                dub.as_deref(),
+                total.as_deref(),
+                media_type.as_deref(),
+            )
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+            .and_then(|input| streaming_library::add(state_dir, input))
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid watchlist action",
+        )),
+    };
+    match result {
+        Ok(present) if wants_json => {
+            let response = Response::from_string(
+                serde_json::json!({ "ok": true, "watchlisted": present }).to_string(),
+            )
+            .with_status_code(StatusCode(200))
+            .with_header(header("Content-Type", "application/json; charset=utf-8"))
+            .with_header(header("Cache-Control", "no-store"))
+            .with_header(header("X-Content-Type-Options", "nosniff"));
+            request.respond(response)?;
+            Ok(())
+        }
+        Ok(_) => {
+            let return_value = value("return");
+            let destination = safe_watchlist_return(return_value.as_deref());
+            let response = Response::empty(StatusCode(303))
+                .with_header(header("Location", &destination))
+                .with_header(header("Cache-Control", "no-store"));
+            request.respond(response)?;
+            Ok(())
+        }
+        Err(error) if wants_json => {
+            let response = Response::from_string(
+                serde_json::json!({ "ok": false, "error": error.to_string() }).to_string(),
+            )
+            .with_status_code(StatusCode(422))
+            .with_header(header("Content-Type", "application/json; charset=utf-8"))
+            .with_header(header("Cache-Control", "no-store"))
+            .with_header(header("X-Content-Type-Options", "nosniff"));
+            request.respond(response)?;
+            Ok(())
+        }
+        Err(error) => respond_text(request, 422, &format!("Watchlist update failed: {error}")),
+    }
+}
+
+fn safe_watchlist_return(value: Option<&str>) -> String {
+    value
+        .filter(|value| {
+            *value == "/streaming"
+                || value.starts_with("/streaming?")
+                || *value == "/streaming/watchlist"
+                || *value == "/streaming/calendar"
+        })
+        .unwrap_or("/streaming/watchlist")
+        .to_owned()
+}
+
+fn streaming_page_response(request: Request, html: String) -> Result<(), Box<dyn Error>> {
+    let response = Response::from_string(decorate_app_html(html))
+        .with_status_code(StatusCode(200))
+        .with_header(header("Content-Type", "text/html; charset=utf-8"))
+        .with_header(header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' https://static.aniwaves.ru; connect-src 'self'; form-action 'self'; base-uri 'none'",
+        ))
+        .with_header(header("Cache-Control", "no-store"))
+        .with_header(header("X-Content-Type-Options", "nosniff"));
+    request.respond(response)?;
+    Ok(())
+}
+
+fn respond_streaming_watchlist_page(
+    request: Request,
+    state_dir: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let library = streaming_library::load(state_dir)?;
+    streaming_page_response(
+        request,
+        streaming_library::render_watchlist(&library.entries, action_token()),
+    )
+}
+
+fn load_watchlist_schedules(
+    client: &Client,
+    entries: &[streaming_library::WatchlistEntry],
+    refresh: bool,
+) -> HashMap<String, Result<aniwaves::StreamSchedule, String>> {
+    let urls = entries
+        .iter()
+        .map(|entry| entry.watch_url.clone())
+        .collect::<Vec<_>>();
+    if urls.is_empty() {
+        return HashMap::new();
+    }
+    let next = AtomicUsize::new(0);
+    let results = Mutex::new(HashMap::with_capacity(urls.len()));
+    thread::scope(|scope| {
+        for _ in 0..urls.len().min(4) {
+            let next = &next;
+            let results = &results;
+            let urls = &urls;
+            scope.spawn(move || {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(watch_url) = urls.get(index) else {
+                        break;
+                    };
+                    let schedule = aniwaves::load_stream_schedule(client, watch_url, refresh)
+                        .map_err(|error| error.to_string());
+                    results
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .insert(watch_url.clone(), schedule);
+                }
+            });
+        }
+    });
+    results
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn respond_streaming_calendar_page(
+    request: Request,
+    client: &Client,
+    state_dir: &Path,
+    refresh: bool,
+) -> Result<(), Box<dyn Error>> {
+    let library = streaming_library::load(state_dir)?;
+    let schedules = load_watchlist_schedules(client, &library.entries, refresh);
+    let now = streaming_library::now_unix();
+    let (html, seen) = streaming_library::render_calendar(
+        &library.entries,
+        &schedules,
+        now,
+        library.calendar_visited_at,
+    );
+    streaming_library::mark_calendar_seen(state_dir, &seen, now)?;
+    streaming_page_response(request, html)
+}
+
 fn respond_changelog_page(request: Request) -> Result<(), Box<dyn Error>> {
-    let response = Response::from_string(render_changelog())
+    let response = Response::from_string(decorate_app_html(render_changelog()))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -3444,7 +4326,7 @@ fn respond_inspection_page(
 <div class="meta-card"><div class="file-block"><span class="meta-label">Generated fixture</span><code>{filename}</code></div><a class="action" href="/"><span>←</span>Inspection home</a></div>
 </main>{view_transition_script}</body></html>"#
     );
-    let response = Response::from_string(body)
+    let response = Response::from_string(decorate_app_html(body))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -3479,6 +4361,65 @@ fn respond_inspection_capture(request: Request, output_dir: &Path) -> Result<(),
     Ok(())
 }
 
+fn thumbnail_queue() -> &'static SyncSender<ThumbnailTask> {
+    THUMBNAIL_QUEUE.get_or_init(|| {
+        let (sender, receiver) = sync_channel::<ThumbnailTask>(THUMBNAIL_QUEUE_CAPACITY);
+        let receiver = Arc::new(Mutex::new(receiver));
+        for worker in 0..THUMBNAIL_WORKERS {
+            let receiver = Arc::clone(&receiver);
+            thread::Builder::new()
+                .name(format!("rustdl-thumb-{worker}"))
+                .spawn(move || {
+                    loop {
+                        let task = {
+                            receiver
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .recv()
+                        };
+                        let Ok(task) = task else { break };
+                        if let Some(generate) = THUMBNAIL_HOOK.get() {
+                            let _ = generate(&task.source, &task.filename);
+                        }
+                        THUMBNAIL_PENDING
+                            .get_or_init(|| Mutex::new(HashSet::new()))
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .remove(&task.filename);
+                    }
+                })
+                .expect("thumbnail worker should start");
+        }
+        sender
+    })
+}
+
+fn enqueue_thumbnail(source: PathBuf, filename: &str) {
+    let pending = THUMBNAIL_PENDING.get_or_init(|| Mutex::new(HashSet::new()));
+    {
+        let mut pending = pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !pending.insert(filename.to_owned()) {
+            return;
+        }
+    }
+    let task = ThumbnailTask {
+        source,
+        filename: filename.to_owned(),
+    };
+    if let Err(error) = thumbnail_queue().try_send(task) {
+        let filename = match error {
+            TrySendError::Full(task) | TrySendError::Disconnected(task) => task.filename,
+        };
+        pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&filename);
+        THUMBNAIL_QUEUE_DROPS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 fn respond_thumbnail(
     request: Request,
     output_dir: &Path,
@@ -3491,19 +4432,137 @@ fn respond_thumbnail(
         return respond_text(request, 404, "Thumbnail not found");
     }
     let thumbnail = output_dir.join(".thumbnails").join(thumbnail_name);
-    if !thumbnail.is_file()
-        && let Some(generate) = THUMBNAIL_HOOK.get()
-    {
-        let source = output_dir.join(filename);
-        let _ = generate(&source, filename);
+    let source = output_dir.join(filename);
+    let thumbnail_fresh = thumbnail.is_file()
+        && fs::metadata(&thumbnail)
+            .and_then(|thumbnail| {
+                fs::metadata(&source).map(|source| {
+                    thumbnail.modified().ok() >= source.modified().ok() && thumbnail.len() > 0
+                })
+            })
+            .unwrap_or(false);
+    if !thumbnail_fresh {
+        THUMBNAIL_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+        enqueue_thumbnail(source, filename);
+    } else {
+        THUMBNAIL_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
     }
     if !thumbnail.is_file() {
-        return respond_text(request, 404, "Thumbnail not found");
+        let response = Response::from_string("Thumbnail is being prepared")
+            .with_status_code(StatusCode(404))
+            .with_header(header("Content-Type", "text/plain; charset=utf-8"))
+            .with_header(header("Cache-Control", "no-store"))
+            .with_header(header("X-Content-Type-Options", "nosniff"));
+        request.respond(response)?;
+        return Ok(());
     }
     let response = Response::from_data(fs::read(thumbnail)?)
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "image/jpeg"))
         .with_header(header("Cache-Control", "private, max-age=86400"))
+        .with_header(header("X-Content-Type-Options", "nosniff"));
+    request.respond(response)?;
+    Ok(())
+}
+
+fn respond_gallery_metrics(request: Request) -> Result<(), Box<dyn Error>> {
+    let pending = THUMBNAIL_PENDING
+        .get()
+        .map(|pending| {
+            pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len()
+        })
+        .unwrap_or(0);
+    let body = serde_json::json!({
+        "renderCount": GALLERY_RENDER_COUNT.load(Ordering::Relaxed),
+        "lastRenderMicros": GALLERY_RENDER_MICROS.load(Ordering::Relaxed),
+        "lastItemCount": GALLERY_LAST_ITEMS.load(Ordering::Relaxed),
+        "thumbnailHits": THUMBNAIL_CACHE_HITS.load(Ordering::Relaxed),
+        "thumbnailMisses": THUMBNAIL_CACHE_MISSES.load(Ordering::Relaxed),
+        "thumbnailPending": pending,
+        "thumbnailQueueDrops": THUMBNAIL_QUEUE_DROPS.load(Ordering::Relaxed),
+    });
+    let response = Response::from_string(body.to_string())
+        .with_status_code(StatusCode(200))
+        .with_header(header("Content-Type", "application/json; charset=utf-8"))
+        .with_header(header("Cache-Control", "no-store"))
+        .with_header(header("X-Content-Type-Options", "nosniff"));
+    request.respond(response)?;
+    Ok(())
+}
+
+fn respond_playback_order(request: Request, output_dir: &Path) -> Result<(), Box<dyn Error>> {
+    let ready = load_gallery_filenames(output_dir)?;
+    let ready_set = ready.iter().cloned().collect::<HashSet<_>>();
+    let mut active = download_jobs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .filter(|(_, job)| {
+            matches!(
+                job.phase,
+                DownloadPhase::Queued
+                    | DownloadPhase::Starting
+                    | DownloadPhase::Downloading
+                    | DownloadPhase::Paused
+            )
+        })
+        .map(|(filename, _)| filename.clone())
+        .filter(|filename| valid_video_filename(filename) && !ready_set.contains(filename))
+        .collect::<Vec<_>>();
+    active.sort_unstable_by(|left, right| right.cmp(left));
+    active.extend(ready);
+    let response = Response::from_string(serde_json::json!({ "items": active }).to_string())
+        .with_status_code(StatusCode(200))
+        .with_header(header("Content-Type", "application/json; charset=utf-8"))
+        .with_header(header("Cache-Control", "no-store"))
+        .with_header(header("X-Content-Type-Options", "nosniff"));
+    request.respond(response)?;
+    Ok(())
+}
+
+fn respond_stream_manifest(
+    request: Request,
+    client: &Client,
+    state_dir: &Path,
+    watch_url: Option<&str>,
+    episode: Option<&str>,
+    refresh: bool,
+) -> Result<(), Box<dyn Error>> {
+    let result = watch_url
+        .ok_or_else(|| "missing AniWaves watch URL".into())
+        .and_then(|watch_url| aniwaves::load_stream_manifest(client, watch_url, episode, refresh));
+    let (status, body) = match result {
+        Ok(manifest) => {
+            let watchlisted = watch_url.is_some_and(|watch_url| {
+                streaming_library::load(state_dir).is_ok_and(|library| {
+                    library
+                        .entries
+                        .iter()
+                        .any(|entry| entry.watch_url == watch_url)
+                })
+            });
+            let mut value = serde_json::to_value(manifest)?;
+            if let Some(object) = value.as_object_mut() {
+                object.insert("watchlisted".to_owned(), watchlisted.into());
+                object.insert(
+                    "watchlistToken".to_owned(),
+                    action_token().to_owned().into(),
+                );
+            }
+            (StatusCode(200), serde_json::to_string(&value)?)
+        }
+        Err(error) => (
+            StatusCode(502),
+            serde_json::json!({ "error": error.to_string() }).to_string(),
+        ),
+    };
+    let response = Response::from_string(body)
+        .with_status_code(status)
+        .with_header(header("Content-Type", "application/json; charset=utf-8"))
+        .with_header(header("Cache-Control", "no-store"))
         .with_header(header("X-Content-Type-Options", "nosniff"));
     request.respond(response)?;
     Ok(())
@@ -4412,7 +5471,7 @@ fn respond_playlist_selection_page(
         escape_html(&playlist.title),
         dev_reload_script()
     );
-    let response = Response::from_string(body)
+    let response = Response::from_string(decorate_app_html(body))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -4533,7 +5592,7 @@ fn respond_discovery_page(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Choose videos</title><style>{DISCOVERY_CSS}</style></head><body><main><header><div><span class="eyebrow">Step 1 of 2</span><h1>Choose videos.</h1><p>Found {count} downloadable video(s). Uncheck anything you do not want.</p></div><a href="/">Cancel</a></header><form action="/quality" method="get"><section>{cards}</section><button type="submit">Continue to format</button></form></main>{}</body></html>"#,
         dev_reload_script()
     );
-    let response = Response::from_string(body)
+    let response = Response::from_string(decorate_app_html(body))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -4623,7 +5682,7 @@ fn respond_quality_page(request: Request, picks: &[String]) -> Result<(), Box<dy
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Choose format</title><style>{DISCOVERY_CSS}.batch-format{{position:sticky;top:.5rem;z-index:4;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:.7rem;padding:.9rem;border:1px solid #70dfc94a;border-radius:16px;background:#0d1716f2;box-shadow:0 12px 30px #0008;backdrop-filter:blur(16px)}}.batch-format label{{display:grid;gap:.4rem;color:#8fe3d2;font-size:.68rem;font-weight:850;letter-spacing:.09em;text-transform:uppercase}}.batch-format button{{padding:.8rem 1rem}}.batch-format p{{grid-column:1/-1;font-size:.75rem}}.quality-card{{display:grid;grid-template-columns:minmax(0,1fr) minmax(12rem,40%);align-items:center;gap:1rem;padding:1rem;border:1px solid #ffffff18;border-radius:17px;background:#11131bde}}.quality-card div,.quality-card label{{display:grid;gap:.4rem}}.quality-card code{{overflow:hidden;color:#70798b;font-size:.68rem;text-overflow:ellipsis;white-space:nowrap}}.quality-card label{{color:#9ca3b3;font-size:.68rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}}select{{width:100%;padding:.75rem;border:1px solid #70dfc948;border-radius:11px;color:#f7f7f8;background:#090a10;font:700 .82rem system-ui}}@media(max-width:600px){{.batch-format,.quality-card{{grid-template-columns:1fr}}}}</style></head><body><main><header><div><span class="eyebrow">Step 2 of 2</span><h1>Download selected as.</h1><p>Apply one MP4 quality or M4A audio format to all {count} queue items, then adjust individual exceptions if needed.</p></div><a href="/">Cancel</a></header><form action="/import" method="get"><div class="batch-format"><label>Download selected as<select id="bulk-format"><option value="best">Video · Best available (MP4)</option><option value="1080">Video · Up to 1080p (MP4)</option><option value="720">Video · Up to 720p (MP4)</option><option value="480">Video · Up to 480p (MP4)</option><option value="audio">Audio only (M4A)</option></select></label><button id="apply-bulk-format" type="button">Apply to all</button><p id="bulk-format-status">Best available MP4 is currently selected for every item.</p></div><section>{cards}</section><button type="submit">Add {count} to queue</button></form></main>{BULK_QUALITY_SCRIPT}{}</body></html>"#,
         dev_reload_script()
     );
-    let response = Response::from_string(body)
+    let response = Response::from_string(decorate_app_html(body))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -5079,7 +6138,7 @@ fn respond_storage_page(
         format_bytes(snapshot.partial_bytes),
         dev_reload_script()
     );
-    let response = Response::from_string(body)
+    let response = Response::from_string(decorate_app_html(body))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -5160,7 +6219,7 @@ fn respond_storage_confirmation(
     let body = format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Confirm cleanup</title><style>{STORAGE_CSS}</style></head><body><main><section class="panel"><span class="eyebrow">Confirmation required</span><h1>{heading}</h1><p>{detail}</p><form class="confirm-actions" action="/storage/action" method="post"><input type="hidden" name="token" value="{token}"><input type="hidden" name="action" value="{action}">{hidden_file}<button type="submit">Confirm</button><a href="/storage">Cancel</a></form></section></main></body></html>"#
     );
-    let response = Response::from_string(body)
+    let response = Response::from_string(decorate_app_html(body))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -5384,7 +6443,7 @@ fn respond_queue_page(request: Request, errors: &[String]) -> Result<(), Box<dyn
         live_events::QUEUE_SCRIPT,
         dev_reload_script()
     );
-    let response = Response::from_string(body)
+    let response = Response::from_string(decorate_app_html(body))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -6119,22 +7178,113 @@ fn playlist_memberships_path(output_dir: &Path) -> PathBuf {
     output_dir.join(".playlists.json")
 }
 
-fn load_playlist_memberships(output_dir: &Path) -> io::Result<HashMap<String, PlaylistMembership>> {
-    match fs::read(playlist_memberships_path(output_dir)) {
-        Ok(data) => Ok(
-            serde_json::from_slice::<HashMap<String, PlaylistMembership>>(&data)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|(filename, membership)| {
-                    valid_video_filename(filename)
-                        && valid_youtube_playlist_id(&membership.playlist_id)
-                        && !membership.title.trim().is_empty()
-                })
-                .collect(),
-        ),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(HashMap::new()),
-        Err(error) => Err(error),
+fn modified_nanos(path: &Path) -> Option<u128> {
+    fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_nanos())
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let metadata = fs::metadata(path).ok()?;
+    Some(FileStamp {
+        len: metadata.len(),
+        modified_nanos: metadata
+            .modified()
+            .ok()?
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_nanos(),
+    })
+}
+
+fn load_gallery_filenames(output_dir: &Path) -> io::Result<Vec<String>> {
+    let directory_modified_nanos = modified_nanos(output_dir);
+    {
+        let mut cache = GALLERY_LISTING_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = cache.get_mut(output_dir)
+            && (entry.checked.elapsed() < Duration::from_millis(400)
+                || entry.directory_modified_nanos == directory_modified_nanos)
+        {
+            entry.checked = Instant::now();
+            return Ok(entry.filenames.clone());
+        }
     }
+
+    let mut filenames = Vec::new();
+    if output_dir.is_dir() {
+        for entry in fs::read_dir(output_dir)? {
+            let entry = entry?;
+            let filename = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type()?.is_file() && valid_video_filename(&filename) {
+                filenames.push(filename);
+            }
+        }
+    }
+    filenames.sort_unstable_by(|left, right| right.cmp(left));
+
+    let mut cache = GALLERY_LISTING_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.len() >= 4 && !cache.contains_key(output_dir) {
+        cache.clear();
+    }
+    cache.insert(
+        output_dir.to_path_buf(),
+        GalleryListingCache {
+            checked: Instant::now(),
+            directory_modified_nanos,
+            filenames: filenames.clone(),
+        },
+    );
+    Ok(filenames)
+}
+
+fn load_playlist_memberships(output_dir: &Path) -> io::Result<HashMap<String, PlaylistMembership>> {
+    let path = playlist_memberships_path(output_dir);
+    let stamp = file_stamp(&path);
+    if let Some(cached) = PLAYLIST_MEMBERSHIP_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(output_dir)
+        .filter(|cached| cached.stamp == stamp)
+        .cloned()
+    {
+        return Ok(cached.memberships);
+    }
+    let memberships = match fs::read(&path) {
+        Ok(data) => serde_json::from_slice::<HashMap<String, PlaylistMembership>>(&data)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(filename, membership)| {
+                valid_video_filename(filename)
+                    && valid_youtube_playlist_id(&membership.playlist_id)
+                    && !membership.title.trim().is_empty()
+            })
+            .collect(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => HashMap::new(),
+        Err(error) => return Err(error),
+    };
+    PLAYLIST_MEMBERSHIP_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(
+            output_dir.to_path_buf(),
+            PlaylistMembershipCache {
+                stamp,
+                memberships: memberships.clone(),
+            },
+        );
+    Ok(memberships)
 }
 
 fn record_playlist_membership(
@@ -6158,7 +7308,13 @@ fn record_playlist_membership(
     let destination = playlist_memberships_path(output_dir);
     let temporary = output_dir.join(".playlists.json.part");
     fs::write(&temporary, data)?;
-    fs::rename(temporary, destination)
+    fs::rename(temporary, destination)?;
+    PLAYLIST_MEMBERSHIP_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(output_dir);
+    Ok(())
 }
 
 fn persist_download_jobs() {
@@ -6293,7 +7449,7 @@ fn respond_download_result(
 <div class="meta-card"><div class="file-block"><span class="meta-label">Download target</span><code>{saved_path}</code></div><a class="action" href="/"><span>▦</span>Open gallery</a></div>
 </main>{playback_script}{view_transition_script}{dev_reload}</body></html>"#,
     );
-    let response = Response::from_string(body)
+    let response = Response::from_string(decorate_app_html(body))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -6371,7 +7527,7 @@ fn respond_watch_page(
 <div class="meta-card"><div class="file-block"><span class="meta-label">{saved_kind}</span><code>{display_filename}</code></div><a class="action" href="/"><span>←</span>Back to library</a></div>
 </main>{playback_script}{view_transition_script}{dev_reload}</body></html>"#,
     );
-    let response = Response::from_string(body)
+    let response = Response::from_string(decorate_app_html(body))
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
         .with_header(html_csp())
@@ -6877,6 +8033,23 @@ fn respond_immutable_asset(
     content_type: &'static str,
 ) -> Result<(), Box<dyn Error>> {
     let response = Response::from_string(content)
+        .with_status_code(StatusCode(200))
+        .with_header(header("Content-Type", content_type))
+        .with_header(header(
+            "Cache-Control",
+            "private, max-age=31536000, immutable",
+        ))
+        .with_header(header("X-Content-Type-Options", "nosniff"));
+    request.respond(response)?;
+    Ok(())
+}
+
+fn respond_immutable_binary_asset(
+    request: Request,
+    content: &'static [u8],
+    content_type: &'static str,
+) -> Result<(), Box<dyn Error>> {
+    let response = Response::from_data(content.to_vec())
         .with_status_code(StatusCode(200))
         .with_header(header("Content-Type", content_type))
         .with_header(header(
@@ -7526,8 +8699,82 @@ mod tests {
         assert!(view_transition_script_path().starts_with("/__app/view-transitions."));
         assert!(index_css_path().starts_with("/__app/index."));
         assert!(player_css_path().starts_with("/__app/player."));
+        assert!(appearance_css_path().starts_with("/__app/appearance."));
+        assert!(appearance_script_path().starts_with("/__app/appearance."));
+        assert!(dark_space_background_path().starts_with("/__app/dark-space."));
+        assert!(dark_space_background_path().ends_with(".png"));
         assert!(index_html_template().contains(index_css_path()));
         assert!(!index_html_template().contains("<style>"));
+    }
+
+    #[test]
+    fn appearance_is_shared_persistent_and_motion_aware() {
+        let html = decorate_app_html(
+            "<!doctype html><html><head></head><body><main>Test</main></body></html>".to_owned(),
+        );
+        assert!(html.contains(appearance_css_path()));
+        assert!(html.contains(appearance_script_path()));
+        assert_eq!(html.matches("data-rustdl-appearance").count(), 2);
+        assert!(APPEARANCE_BOOT_SCRIPT.contains("bridge.appearance()"));
+        assert!(APPEARANCE_SCRIPT.contains("document.startViewTransition"));
+        assert!(APPEARANCE_SCRIPT.contains("visibilitychange"));
+        assert!(APPEARANCE_CSS.contains("rustdl-space-drift"));
+        assert!(APPEARANCE_CSS.contains("prefers-reduced-motion"));
+        assert!(APPEARANCE_CSS.contains("data-theme=\"light\""));
+        assert!(APPEARANCE_CSS.contains(".gallery-filters button[aria-pressed=\"true\"]"));
+        assert!(APPEARANCE_CSS.contains(".card-menu-button:hover"));
+        assert!(APPEARANCE_CSS.contains(".card-popover :is(a, button)"));
+        assert!(APPEARANCE_CSS.contains(".metric, .item, .system"));
+        assert!(APPEARANCE_CSS.contains(".health div, .system-row, .media-row"));
+        assert!(APPEARANCE_CSS.contains("form > button[type=\"submit\"]"));
+        assert!(!APPEARANCE_CSS.contains("--rustdl-light-"));
+        assert!(APPEARANCE_CSS.contains(":root[data-theme] :is("));
+        assert!(appearance_css().contains(dark_space_background_path()));
+        assert!(!appearance_css().contains(DARK_SPACE_BACKGROUND_PLACEHOLDER));
+        assert!(DARK_SPACE_BACKGROUND.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(INDEX_HTML.contains("href=\"/streaming\""));
+        for token in [
+            "--rustdl-page:",
+            "--rustdl-surface:",
+            "--rustdl-text:",
+            "--rustdl-control:",
+            "--rustdl-input:",
+            "--rustdl-accent:",
+            "--rustdl-danger:",
+        ] {
+            assert_eq!(APPEARANCE_CSS.matches(token).count(), 2, "{token}");
+        }
+    }
+
+    #[test]
+    fn isolated_streaming_uses_ranked_manifests_instead_of_full_watch_pages() {
+        const MAIN_ACTIVITY: &str = include_str!("../android/MainActivity.java");
+        const STREAMING_ACTIVITY: &str = include_str!("../android/StreamingActivity.java");
+        assert!(MAIN_ACTIVITY.contains("EXTRA_MANIFEST_URL"));
+        assert!(MAIN_ACTIVITY.contains("__app/stream-manifest.json?url="));
+        assert!(MAIN_ACTIVITY.contains("request.isRedirect() || !request.hasGesture()"));
+        assert!(STREAMING_ACTIVITY.contains("requestManifest"));
+        assert!(STREAMING_ACTIVITY.contains("queueFailover"));
+        assert!(STREAMING_ACTIVITY.contains("changeEpisode"));
+        assert!(STREAMING_ACTIVITY.contains("Spinner.MODE_DROPDOWN"));
+        assert!(STREAMING_ACTIVITY.contains("selectEpisode(selected.number)"));
+        assert!(STREAMING_ACTIVITY.contains("episodeAdapter.notifyDataSetChanged()"));
+        assert!(STREAMING_ACTIVITY.contains("Downloads are disabled in streaming mode"));
+        assert!(STREAMING_ACTIVITY.contains("WindowManager.LayoutParams.FLAG_SECURE"));
+        assert!(
+            STREAMING_ACTIVITY
+                .contains("allowedSourceHosts.contains(normalizeHost(uri.getHost()))")
+        );
+        assert!(
+            STREAMING_ACTIVITY
+                .contains("new String[] {\"all\", \"sub\", \"dub\", \"ready\", \"issues\"}")
+        );
+        assert!(STREAMING_ACTIVITY.contains("matchesFilter(sources.get(index), sourceFilter)"));
+        assert!(STREAMING_ACTIVITY.contains("item.optJSONArray(\"allowedHosts\")"));
+        assert!(!STREAMING_ACTIVITY.contains("HOME_URL"));
+        assert!(!STREAMING_ACTIVITY.contains("webView.canGoBack()"));
+        assert!(!STREAMING_ACTIVITY.contains("redirectsAllowedUntil"));
+        assert!(!STREAMING_ACTIVITY.contains("initialRedirect"));
     }
 
     #[test]
@@ -7609,10 +8856,48 @@ mod tests {
         assert!(html.contains(&format!(r#"src="/thumbnail/{filename}.jpg""#)));
         assert!(html.contains(index_css_path()));
         assert!(index_css().contains("@view-transition { navigation: auto; }"));
-        assert!(html.contains("view-transition-name:video-2091257067264733401-1"));
+        assert!(html.contains(r#"data-view-transition-name="video-2091257067264733401-1""#));
 
         fs::remove_file(path).expect("remove gallery test video");
         fs::remove_dir(directory).expect("remove gallery test directory");
+    }
+
+    #[test]
+    fn gallery_bounds_initial_dom_and_embeds_the_full_index() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let directory = env::temp_dir().join(format!(
+            "rustdl-gallery-window-test-{}-{timestamp}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create gallery window directory");
+        let filenames = (0..40)
+            .map(|index| format!("{}-1.mp4", 9_000_000_000_000_000_000_u64 + index))
+            .collect::<Vec<_>>();
+        for filename in &filenames {
+            fs::write(directory.join(filename), b"test").expect("create gallery item");
+        }
+
+        let html = render_index(&directory).expect("render bounded gallery");
+        assert_eq!(
+            html.matches("data-gallery-index=").count(),
+            GALLERY_INITIAL_ITEMS
+        );
+        assert_eq!(
+            html.matches("class=\"card-menu-button\"").count(),
+            GALLERY_INITIAL_ITEMS
+        );
+        assert!(html.contains("id=\"gallery-data\""));
+        assert!(html.contains(&filenames[0]));
+        assert!(PLAYBACK_SCRIPT.contains("IntersectionObserver"));
+        assert!(PLAYBACK_SCRIPT.contains("batchSize=32"));
+
+        for filename in filenames {
+            fs::remove_file(directory.join(filename)).expect("remove gallery item");
+        }
+        fs::remove_dir(directory).expect("remove gallery window directory");
     }
 
     #[test]
@@ -7627,6 +8912,19 @@ mod tests {
         assert!(PLAYBACK_SCRIPT.contains("wireMiniBrowser"));
         assert!(PLAYBACK_SCRIPT.contains("setPlaybackState"));
         assert!(PLAYER_CSS.contains(".mini-player-dock"));
+    }
+
+    #[test]
+    fn player_and_gallery_share_a_persistent_up_next_queue() {
+        assert!(PLAYBACK_SCRIPT.contains("rustdl:up-next:v1"));
+        assert!(PLAYBACK_SCRIPT.contains("data-control-next"));
+        assert!(PLAYBACK_SCRIPT.contains("Add to Up Next"));
+        assert!(PLAYBACK_SCRIPT.contains("Remove from Up Next"));
+        assert!(PLAYBACK_SCRIPT.contains("/__app/playback-order.json"));
+        assert!(PLAYBACK_SCRIPT.contains("nexttrack:advanceToNext"));
+        assert!(PLAYBACK_SCRIPT.contains("miniNext.addEventListener"));
+        assert!(PLAYBACK_SCRIPT.contains("data-clear-up-next"));
+        assert!(INDEX_HTML.contains(".playback-queue-status"));
     }
 
     #[test]
@@ -7652,7 +8950,13 @@ mod tests {
 
     #[test]
     fn changelog_covers_every_version_and_marks_the_current_release() {
-        assert_eq!(CHANGELOG.len(), 35);
+        let current_patch = env!("CARGO_PKG_VERSION")
+            .rsplit('.')
+            .next()
+            .expect("package patch version")
+            .parse::<usize>()
+            .expect("numeric package patch version");
+        assert_eq!(CHANGELOG.len(), current_patch + 1);
         for (index, (version, changes)) in CHANGELOG.iter().rev().enumerate() {
             assert_eq!(*version, format!("0.1.{index}"));
             assert!(!changes.is_empty());
@@ -7674,7 +8978,13 @@ mod tests {
         assert!(html.contains(r#"id="version-go""#));
         assert!(html.contains("scrollIntoView"));
         assert!(html.contains("history.replaceState"));
-        assert_eq!(html.matches(r#"class="release-actions""#).count(), 33);
+        assert_eq!(
+            html.matches(r#"class="release-actions""#).count(),
+            CHANGELOG
+                .iter()
+                .filter(|(version, _)| !changelog_destinations(version).is_empty())
+                .count()
+        );
         assert!(html.contains("Go to Settings"));
         assert!(html.contains("Go to Diagnostics"));
         assert!(!html.contains(r#"href="/control"#));
@@ -7853,11 +9163,13 @@ mod tests {
     fn gallery_search_and_filters_are_wired_to_media_and_folders() {
         assert!(INDEX_HTML.contains(".gallery-tools"));
         assert!(PLAYBACK_SCRIPT.contains("syncGalleryFilter"));
-        assert!(PLAYBACK_SCRIPT.contains("filter==='playlists'&&folder"));
+        assert!(PLAYBACK_SCRIPT.contains("filter==='playlists'&&playlist"));
         assert!(PLAYBACK_SCRIPT.contains("filter==='audio'&&audio"));
         assert!(PLAYBACK_SCRIPT.contains("filter==='downloading'&&downloading"));
-        assert!(PLAYBACK_SCRIPT.contains("text:card.textContent.toLocaleLowerCase()"));
-        assert!(PLAYBACK_SCRIPT.contains("entry.text.includes(query)"));
+        assert!(PLAYBACK_SCRIPT.contains("entry.searchText"));
+        assert!(PLAYBACK_SCRIPT.contains("renderBatch"));
+        assert!(PLAYBACK_SCRIPT.contains("galleryEntries.forEach"));
+        assert!(PLAYBACK_SCRIPT.contains("gallery-card-actions"));
         assert!(PLAYBACK_SCRIPT.contains("requestAnimationFrame"));
         assert!(PLAYBACK_SCRIPT.contains("sessionStorage.setItem(stateKey"));
     }
