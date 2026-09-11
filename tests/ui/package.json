@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "scripts": { "test": "node --test parallax.test.cjs background-theme.test.cjs gallery-refresh.test.cjs playlist-selection.test.cjs playlist-resolution.test.cjs list-pagination.test.cjs" },
+  "devDependencies": { "jsdom": "30.0.1" }
+}

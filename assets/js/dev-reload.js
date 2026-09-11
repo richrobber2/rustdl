@@ -1,0 +1,1 @@
+(()=>{let version="__RUSTDL_VERSION_TOKEN__";setInterval(async()=>{try{const response=await fetch('/__dev/version',{cache:'no-store'});if(!response.ok)return;const next=await response.text();if(next!==version)location.reload()}catch(_error){}},500)})();

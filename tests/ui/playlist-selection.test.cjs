@@ -1,0 +1,32 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const path=require('node:path');
+
+test('select all includes 500 entries, including filtered entries',()=>{
+  const element=()=>({checked:false,disabled:false,value:'',textContent:'',handlers:{},addEventListener(name,handler){this.handlers[name]=handler;}});
+  const ids=Object.fromEntries(['playlist-form','selected-count','playlist-continue','playlist-filter','select-all','select-visible','select-first','clear-selection'].map(id=>[id,element()]));
+  const boxes=Array.from({length:500},element);
+  const cards=boxes.map((box,index)=>({hidden:false,textContent:index<250?'First artist':'Second artist',querySelector:()=>box}));
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../assets/js/playlist.js'),'utf8'),{document:{getElementById:id=>ids[id],querySelectorAll:()=>cards}});
+  const click=id=>ids[id].handlers.click();
+  ids['playlist-filter'].value='First artist';
+  ids['playlist-filter'].handlers.input();
+  click('select-visible');
+  assert.equal(boxes.filter(box=>box.checked).length,250);
+  click('select-all');
+  assert.equal(boxes.filter(box=>box.checked).length,500);
+  assert.equal(ids['selected-count'].textContent,500);
+  assert.equal(ids['playlist-continue'].disabled,false);
+  click('clear-selection');
+  assert.equal(boxes.filter(box=>box.checked).length,0);
+  assert.equal(ids['playlist-continue'].disabled,true);
+  click('select-first');
+  assert.equal(boxes.filter(box=>box.checked).length,10);
+  click('select-all');
+  let prevented=false;
+  ids['playlist-form'].handlers.submit({preventDefault(){prevented=true;}});
+  assert.equal(prevented,false);
+  assert.equal(ids['playlist-continue'].textContent,'Opening preparation…');
+});

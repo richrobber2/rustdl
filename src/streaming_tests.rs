@@ -1,4 +1,4 @@
-use super::*;
+use super::local::web_assets::PLAYBACK_SCRIPT;
 
 #[test]
 fn progressive_seek_uses_real_browser_buffer_ranges() {
@@ -18,7 +18,10 @@ fn progressive_seek_uses_real_browser_buffer_ranges() {
 
 #[test]
 fn growing_streams_wake_on_download_progress_without_busy_polling() {
-    let source = include_str!("main.rs");
+    let source = concat!(
+        include_str!("local/media.rs"),
+        include_str!("local/queue.rs")
+    );
     assert!(source.contains("DOWNLOAD_PROGRESS_SIGNAL"));
     assert!(source.contains("wait_timeout_while"));
     assert!(source.contains("signal_growing_media();"));
@@ -27,7 +30,7 @@ fn growing_streams_wake_on_download_progress_without_busy_polling() {
 
 #[test]
 fn player_marks_complete_and_growing_media_explicitly() {
-    let source = include_str!("main.rs");
+    let source = include_str!("../assets/html/download-result.html");
     assert!(source.contains(r#"data-growing="{growing}""#));
     assert!(PLAYBACK_SCRIPT.contains("video.dataset.growing==='true'"));
     assert!(PLAYBACK_SCRIPT.contains("if(!growing||"));

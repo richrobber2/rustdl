@@ -1,8 +1,11 @@
 # rustdl
 
-A Rust CLI, web page, and Android app for downloading MP4 video from public X posts,
-YouTube videos, and Snapchat Spotlight. The server, HTML, and download handling are all hosted by the Rust
-binary; no Node, Python, JavaScript, `yt-dlp`, or `ffmpeg` is needed.
+A Rust CLI, web UI, and Android app for downloading MP4 video from public X posts,
+YouTube videos, and Snapchat Spotlight, with an AniWaves streaming catalog on Android.
+The Rust binary serves the HTML, CSS, and JavaScript and handles downloads. The UI
+runs JavaScript in the browser or Android WebView; no separately installed JavaScript
+runtime, Node.js, Python, `yt-dlp`, or `ffmpeg` is required. YouTube extraction also
+uses an embedded JavaScript engine through `rustypipe`.
 
 ## Quick start: Android APK
 
@@ -28,6 +31,18 @@ Install it with Android's package installer or with ADB:
 adb install -r target/android-termux/rustdl.apk
 ```
 
+If the original signing key was lost, build a separate installation with:
+
+```sh
+RUSTDL_VARIANT=alongside make apk
+```
+
+This produces `target/android-termux-alongside/rustdl.apk`, labeled **RustDL Next**
+with package ID `app.rustdl.next`. It uses separate app data, local ports 37758/37759
+(and peer port 37760), and `Downloads/RustDL Next`. The existing app remains installed;
+its private library and settings are not migrated. Keep `android/debug.keystore`
+backed up outside Termux so future builds can update this installation.
+
 The app embeds the Rust server in a native library and displays its UI in a secured
 localhost WebView. Paste a link normally, or use **Share → Download with RustDL**
 from X, YouTube, or Snapchat to begin a download immediately. Android's MediaStore publishes completed files to
@@ -39,10 +54,11 @@ player and streams from the growing `.part` file while the background worker kee
 writing it. Requests that reach the write edge wait for the next chunk, then resume;
 completed files still use atomic rename, duplicate detection, byte-range seeking, and
 MediaStore publication. The persistent Smart Queue keeps partial files and resumes
-them with HTTP byte ranges after a network interruption or app restart. It runs at
-most two transfers concurrently and exposes pause, resume, retry, cancel, progress,
-and direct-play controls. Paste up to 50 links at once or share text containing
-multiple X links; duplicate links and already-completed videos are not added twice.
+them with HTTP byte ranges after a network interruption or app restart. It runs
+one to three transfers concurrently, depending on device conditions, using a fixed
+pool of three workers. Waiting items do not create extra threads. The queue exposes
+pause, resume, retry, cancel, progress, and direct-play controls. Paste up to 50 links
+at once or share text containing multiple X links; duplicate links and already-completed videos are not added twice.
 On Android, active work is protected by a foreground data-sync service with a private
 aggregate progress notification (after the standard one-time notification permission).
 
@@ -56,11 +72,12 @@ for X and Snapchat, Android losslessly copies the existing audio track after the
 progressive source finishes, without re-encoding. Audio files have independent
 duplicate keys, resume with the queue, publish with the correct MediaStore MIME type,
 and open in the gallery's audio player. Discovery
-sessions are short-lived and capped at 50 videos.
+sessions are short-lived; post discovery is capped at 50 videos, while playlist selections can include all loaded entries.
 
 YouTube Shorts, watch, embed, live, and `youtu.be` links resolve through the
-Rust-native `rustypipe` extractor. RustDL offers each progressive MP4 quality that
-already contains both video and audio, so no Python or FFmpeg runtime is required.
+`rustypipe` extractor. RustDL prefers progressive MP4 streams that already contain
+both video and audio. When those are unavailable, Android can combine separate
+H.264 MP4 video and M4A audio tracks using its native media APIs.
 Signed YouTube stream links are refreshed automatically before a resumed transfer
 when they are close to expiry while retaining the selected resolution. Private,
 paid, age-restricted, and region-blocked videos are not bypassed.
@@ -68,9 +85,12 @@ paid, age-restricted, and region-blocked videos are not bypassed.
 YouTube `/playlist?list=…` links are also supported. RustDL follows playlist
 continuations to load the full public entry list, then opens a searchable selection
 screen without resolving hundreds of media streams up front. Choose individual
-entries, the first 10, or up to 50 visible results per queue batch; nothing starts
+entries, the first 10, visible results, or **Select all** for the full playlist; nothing starts
 until the selected entries are resolved and the user chooses video quality or
-audio-only for each one. Selected entries retain their playlist title and original
+audio-only for each one. Preparation opens a live progress page immediately, reuses
+three extractor workers, and supports cancellation. Failed entries are listed before
+continuing with the available videos. Playlist and format screens show 32 entries per page; Select all and bulk format
+changes still include every page. Selected entries retain their playlist title and original
 position. The main gallery presents them as one folder, and opening it shows only
 that playlist in order; later batches join the same folder automatically. The format
 step also has **Download selected as** presets that apply best MP4, a shared MP4
@@ -121,7 +141,7 @@ while keyboard seeking remains available.
 
 Stable gallery/player styles and scripts use content-hashed immutable URLs so WebView
 can reuse parsed assets across navigation. Rust records BLAKE3 fingerprints during
-downloads for fast duplicate scans, while worker count and I/O buffers adapt to the
+downloads for fast duplicate scans, while active transfer count and I/O buffers adapt to the
 phone's network, charging, power-save, thermal, storage, and CPU conditions.
 
 Run `make help` for the short command list. `make check` verifies the Android toolchain
@@ -130,11 +150,52 @@ starts the web app, and `make dev` starts hot reload. Advanced builds can set
 `ANDROID_JAR=/path/to/android.jar`. Generated platform files and signing keys remain
 local and are ignored by Git.
 
+Screenshots are blocked by default. Enable **Settings → Allow screenshots** and
+save to permit screenshots, screen recording, and app previews. This applies to
+the main app and anime player; restoring defaults blocks screenshots again.
+
+Choose **Settings → Background theme → Rainy City**, then **Save settings**, for
+the optional city background with subtle parallax while scrolling. Reduced motion
+keeps it still. Light mode uses the matching daylight artwork;
+dark mode uses the neon night scene. Space remains the default; Restore defaults
+returns to it. The background choice persists independently of light/dark mode.
+
+### Streaming catalog, watchlist, and calendar
+
+Open **AniWaves streaming** from the gallery to browse newest, updated, ongoing,
+or recently added titles, or search the catalog. On Android, selecting a title opens
+a dedicated streaming player with episode selection. Streaming mode disables
+downloads and stays separate from the saved-media gallery.
+
+AniWaves browsing includes a Categories picker with 19 genres and six media types.
+Category selection is preserved across pagination and refresh; title search still
+searches the full library.
+
+Save titles from the catalog or player to the persistent **Watchlist**, then open
+**Calendar** to see their latest known release information grouped by day. New badges
+compare episode information with the previous successful calendar check. Use
+**Refresh schedules** to request fresh information; unavailable schedules are shown
+separately. Release timestamps display in the phone's timezone.
+
+### Activity and settings
+
+Open **Activity** from the gallery for download and device-transfer progress,
+errors, available storage, and Android update status. Filters show all operations,
+active work, items needing attention, or completed work. Each row links to its
+player, queue, or transfer screen. State events refresh the page promptly, with a
+15-second recovery poll while it is visible. Activity is unavailable in inspection
+mode.
+
+Android's **Settings** page controls the completed-download folder, keeping the
+screen awake during playback, appearance, the moving space background, and the
+diagnostics refresh interval. Changing the folder affects future exports; existing
+exports remain in place and the playback cache remains private to the app.
+
 ### Live diagnostics
 
 The normal-mode **Diagnostics** page samples Android APIs from inside the installed
-APK every three seconds while visible. It reports battery level, charging state,
-battery temperature, Android thermal severity, normalized CPU load, available/total
+APK every five seconds by default while visible; Settings offers 3, 5, 10, or 30
+seconds. It reports battery level, charging state, battery temperature, Android thermal severity, normalized CPU load, available/total
 memory, available/total internal storage, device uptime, and the RustDL app process.
 A manual refresh and copyable JSON snapshot are available for troubleshooting. No
 ADB process, external executable, privileged receiver, or setup step is required.
@@ -178,12 +239,12 @@ and only the isolated inspection process closes afterward. The normal app keeps
 running. It never captures the device display, another app, saved videos, shared text,
 or other user content. Launching RustDL normally or from the share sheet always enters
 the normal process, even if inspection mode is active at the same time. Normal
-user-mode windows use Android's secure-window protection, which blocks screenshots
-and display capture. Only the isolated synthetic inspection UI is renderable by the
+user-mode windows use Android's secure-window protection by default. The optional
+**Allow screenshots** setting permits screenshots and display capture in normal mode. Only the isolated synthetic inspection UI is renderable by the
 guarded inspection workflow.
 
 The home screen also exposes an explicit mode control. **Preview safe UI** launches
-the isolated synthetic task, while **Return to my gallery** returns to the secure
+the isolated synthetic task, while **Return to my gallery** returns to the
 normal task. User videos and generated thumbnails are never mounted into inspection
 mode.
 
@@ -193,11 +254,12 @@ mode.
 cargo run -- serve
 ```
 
-Open <http://127.0.0.1:8080>, paste one or more X links into the input, and select
-**Add to queue**.
-On Android, videos are saved to `/sdcard/Download/RustDL`. The status ID and video
-number form a stable filename, so submitting the same link again detects the existing
-file and skips the duplicate download.
+Open <http://127.0.0.1:8080>, paste supported X, YouTube, or Snapchat links, and select
+**Find videos**. Choose the items and formats to add to the queue.
+The Android app exports completed media through MediaStore to `Downloads/RustDL`
+by default and keeps a private playback copy. Stable source IDs form the filenames,
+so submitting the same item and format again detects the existing file and skips
+the duplicate download.
 
 The result page includes a native browser video player as soon as downloading starts.
 The home-page gallery shows active and saved videos so they can be reopened later.
@@ -229,13 +291,13 @@ For development, start the watcher instead of the regular server:
 cargo run -- dev
 ```
 
-Changes under `src/` or to `Cargo.toml` trigger a rebuild. A successful build restarts
+Changes under `src/`, `assets/`, or to `Cargo.toml` trigger a rebuild. A successful build restarts
 the Rust server and reloads connected browser pages automatically. If compilation
 fails, the last working server stays online while the compiler error is shown in the
 terminal. `--bind` and `--output-dir` work in development mode too.
 
 For Android development, the APK watcher rebuilds, reinstalls, and relaunches a chosen
-mode whenever Rust, Java, XML, or Android script sources change:
+mode whenever Rust, web assets, Java, XML, or Android script sources change:
 
 ```sh
 sh android/hot-reload.sh normal 10.5.0.2:39271
@@ -292,11 +354,123 @@ cargo run -- -o video.mp4 'https://x.com/user/status/123/video/1'
 cargo run -- --force -o video.mp4 'https://x.com/user/status/123/video/1'
 ```
 
-The default filename is `<status-id>-<video-number>.mp4` inside the platform's
-`Downloads/RustDL` folder. Existing completed files are treated as duplicates. The
+For X posts, the default filename is `<status-id>-<video-number>.mp4` inside the
+platform's `Downloads/RustDL` folder. Existing completed files are treated as duplicates. The
 downloader writes to a temporary `.part` file and renames it only after the transfer
 succeeds.
 
 Public post metadata is resolved through the third-party FxTwitter API; downloading
 private or login-only posts is not supported. Only download media you are permitted
 to save and follow the platform's terms and applicable law.
+
+## Source layout
+
+Functions use explicit namespaces at call sites:
+
+- `local::` contains local parsing, formatting, UI, filesystem operations, and app
+  state. It does not initiate provider requests or schedule network downloads.
+- `external::` contains outbound HTTP and provider integrations. YouTube, X,
+  Snapchat, AniWaves, and peer-device requests have separate modules.
+- `workflows::` coordinates local state and external operations, including discovery,
+  download workers, streaming requests, and server startup.
+
+For example, `local::youtube::video_id(url)` only parses a URL;
+`external::youtube::resolve_candidate(url)` requests video metadata and
+streams. `local::queue::persist_download_jobs()` saves local queue state, while
+`workflows::downloads::start_web_download(...)` resolves a source and starts work.
+`local::sources::classify_url(url)` returns a named `SourceUrl` with the parsed
+identifier for download/discovery links, or `Unsupported`. Link extraction,
+discovery dispatch, playlist routing, and download refresh use this classifier.
+AniWaves catalog navigation retains its separate streaming route.
+Provider-specific parsers remain under `local::` even when their input came from
+an external service. Peer HTTP requests belong under `external::peers`.
+
+| Directory | Main responsibilities |
+| --- | --- |
+| `assets/html/`, `assets/css/`, `assets/js/` | Page templates, stylesheets, and browser scripts embedded with `include_str!()` |
+| `src/local/` | Media serving, UI assets and pages, storage, queue state, runtime hooks, and provider parsers |
+| `src/local/pages/` | Gallery, player, download result, settings, diagnostics, and changelog page features |
+| `src/external/` | YouTube, X, Snapchat, AniWaves, peer requests, and HTTP downloads |
+| `src/workflows/` | CLI/server startup and discovery, download, transfer, and streaming flows |
+
+`src/main.rs` declares these namespaces and delegates to `workflows::cli::run()`.
+`src/lib.rs` includes the same application for Android's JNI library and calls its
+namespaced runtime hooks. Keep function calls qualified rather than importing
+application functions into a flat scope.
+
+`local::pages::<feature>::render(...)` builds HTML without an HTTP request.
+Page `respond(...)` functions validate request-specific state and send the result.
+Player rendering takes `PlaybackState::Complete` or `PlaybackState::Growing` so
+callers state the playback mode explicitly. Avoid repeating a provider name in
+its functions: use `external::youtube::resolve_candidate(...)`, for example.
+Shared HTML responses and script JSON escaping live in `local::html`; gallery/player
+transition names live in `local::web_assets`. Settings keeps its existing renderer
+in `local::settings`.
+
+Application regression tests live in `src/app_tests.rs`, alongside focused test
+modules. Provider network tests are opt-in and remain ignored in the normal suite.
+Run `cargo fmt --check` and `make test` before submitting changes.
+After `cargo build --release`, run `python3 tests/integration/download-pool.py`
+to exercise 500 local HTTP downloads, pause/cancel, retry, byte-range resume, and
+restart recovery in a temporary library. It also checks that thread count stays
+bounded and writes measurements to `target/download-pool-integration.json`.
+
+### Editing UI assets
+
+Edit page templates in `assets/html/`, styles in `assets/css/`, and scripts in
+`assets/js/`. Rust embeds them at compile time with `include_str!()`, so the CLI
+and APK remain self-contained and need no asset directory at runtime. Both reload
+watchers rebuild when assets change.
+
+HTML templates use Rust format fields such as `{heading}` or `{page_css}`;
+the corresponding renderer supplies escaped text, generated markup, or embedded
+assets explicitly. Literal braces in HTML format templates must be doubled.
+CSS and JavaScript files use normal single braces. A few scripts contain
+`__RUSTDL_*__` markers for values supplied by Rust; preserve the existing escaping
+when editing their renderers.
+
+Shared styles and scripts retain their content-hashed immutable URLs. Page-specific
+styles and scripts are assembled into their existing inline positions. Small dynamic
+markup fragments stay beside the Rust code that renders them.
+
+Gallery refresh regression tests use synthetic media entries only:
+
+```sh
+npm --prefix tests/ui install
+npm --prefix tests/ui test
+```
+
+### Anime episode downloads
+
+Start an episode in the anime player, then tap **Download episode** next to the
+watchlist control. Choose a source offered by the player. Downloads run in an
+Android foreground service, with progress and a Cancel action in notifications;
+completed MP4 files appear in the gallery and the configured Downloads folder.
+One episode downloads at a time. The stream player's JavaScript isolation stays
+in place: only the native download control can start a download.
+
+Direct MP4 and complete, unencrypted HLS playlists are supported, including
+separate audio renditions and fragmented MP4 initialization segments. HLS uses
+the highest-bandwidth variant offered by the selected playlist. Encrypted/live
+streams, byte-range playlists, and discontinuous timelines are not supported;
+the app reports an error so another source can be selected. Failed or cancelled
+jobs can be retried from the player; downloads currently restart rather than resume.
+
+Run `sh android/test-anime.sh` in Termux for synthetic playlist and Android media
+conversion checks. The tests compare encoded track hashes and never play media.
+
+### Optional development performance tests
+
+`make dev-test` runs the synthetic gallery load, DOM, and scroll-loading benchmarks
+under `dev::`. Install the UI dependencies first with `npm --prefix tests/ui install`.
+These tests require the explicit Cargo `dev` feature and a test build; they are not
+included in the application or normal test runs. See [dev test instructions](src/dev/README.md)
+for individual commands and the distinction between synthetic timings and actual
+WebView frame rate.
+
+For actual on-screen Android measurements, use `make dev-apk`, install its
+`target/android-termux-alongside-dev/rustdl.apk`, then run `make dev-visual`.
+It renders discovered synthetic screen fixtures in the real WebView and prints
+`PASS`, `FAIL`, `SCROLL`, and `MISSING` coverage lines to the terminal. New/changed
+UI sources and an outdated installed APK stop the run instead of testing stale
+code. Normal APKs exclude the visual benchmark activity and assets.

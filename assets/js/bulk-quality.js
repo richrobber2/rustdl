@@ -1,0 +1,7 @@
+(()=>{
+const cards=[...document.querySelectorAll('.quality-card')];if(cards.length)globalThis.RustDLPagination?.create(cards[0].parentElement,cards);
+const preset=document.getElementById('bulk-format'),apply=document.getElementById('apply-bulk-format'),status=document.getElementById('bulk-format-status'),selects=[...document.querySelectorAll('.quality-card select[name="pick"]')];
+const choose=(select,value)=>{const options=[...select.options],audio=options.find(option=>option.dataset.kind==='audio'),videos=options.filter(option=>option.dataset.kind==='video');let chosen;if(value==='audio')chosen=audio;else if(value==='best')chosen=videos[0];else{const target=Number(value),sized=videos.filter(option=>Number(option.dataset.height)>0),below=sized.filter(option=>Number(option.dataset.height)<=target).sort((a,b)=>Number(b.dataset.height)-Number(a.dataset.height)),above=sized.filter(option=>Number(option.dataset.height)>target).sort((a,b)=>Number(a.dataset.height)-Number(b.dataset.height));chosen=below[0]||above[0]||videos[0]}if(chosen){if(select.value!==chosen.value)select.value=chosen.value;return true}return false};
+const applyAll=()=>{let applied=0;for(const select of selects)if(choose(select,preset.value))applied++;status.textContent='Applied to '+applied+' selected '+(applied===1?'item':'items')};
+apply.addEventListener('click',applyAll);preset.addEventListener('change',applyAll);
+})();

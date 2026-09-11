@@ -3,7 +3,14 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ANDROID_DIR="$ROOT_DIR/android"
-BUILD_DIR="$ROOT_DIR/target/android-termux"
+VARIANT=${RUSTDL_VARIANT:-standard}
+case "$VARIANT" in
+    standard) BUILD_DIR="$ROOT_DIR/target/android-termux" ;;
+    alongside) BUILD_DIR="$ROOT_DIR/target/android-termux-alongside" ;;
+    *) echo "RUSTDL_VARIANT must be standard or alongside" >&2; exit 2 ;;
+esac
+DEV=${RUSTDL_DEV:-0}
+case "$DEV" in 0) ;; 1) BUILD_DIR="$BUILD_DIR-dev" ;; *) echo "RUSTDL_DEV must be 0 or 1" >&2; exit 2 ;; esac
 FRAMEWORK_RES=/system/framework/framework-res.apk
 ANDROID_JAR=${ANDROID_JAR:-}
 
@@ -69,15 +76,59 @@ find "$BUILD_DIR" -mindepth 1 -delete
 mkdir -p "$BUILD_DIR/classes" "$BUILD_DIR/dex" "$BUILD_DIR/compiled" \
     "$BUILD_DIR/apk/lib/arm64-v8a"
 
-javac --release 8 -classpath "$ANDROID_JAR" \
+SOURCE_DIR="$BUILD_DIR/source"
+# Stage every build so optional development sources never modify android/.
+mkdir -p "$SOURCE_DIR"
+cp "$ANDROID_DIR"/*.java "$SOURCE_DIR/"
+cp "$ANDROID_DIR/AndroidManifest.xml" "$SOURCE_DIR/"
+cp -R "$ANDROID_DIR/res" "$SOURCE_DIR/res"
+if [ "$VARIANT" = alongside ]; then
+    # Keep Java package/class names stable for the Rust JNI symbols.
+    sed -i \
+        -e 's/package="app.rustdl"/package="app.rustdl.next"/' \
+        -e 's/android:label="RustDL"/android:label="RustDL Next"/' \
+        -e 's/Download with RustDL/Download with RustDL Next/' \
+        -e 's/app.rustdl.preferences/app.rustdl.next.preferences/g' \
+        -e 's/app.rustdl.inspection/app.rustdl.next.inspection/g' \
+        -e 's/app.rustdl.action./app.rustdl.next.action./g' \
+        "$SOURCE_DIR/AndroidManifest.xml"
+    sed -i 's/android:targetPackage="app.rustdl"/android:targetPackage="app.rustdl.next"/' \
+        "$SOURCE_DIR/res/xml/shortcuts.xml"
+    sed -i 's/RustDL/RustDL Next/g' "$SOURCE_DIR/res/values/strings.xml"
+    for SOURCE in "$SOURCE_DIR"/*.java; do
+        sed -i \
+            -e 's/37658/37758/g' -e 's/37659/37759/g' \
+            -e 's/37_658/37_758/g' -e 's/37_659/37_759/g' \
+            -e 's/app.rustdl.action./app.rustdl.next.action./g' \
+            -e 's/DEFAULT_DOWNLOAD_FOLDER = "RustDL"/DEFAULT_DOWNLOAD_FOLDER = "RustDL Next"/' \
+            "$SOURCE"
+    done
+fi
+
+if [ "$DEV" = 1 ]; then
+    cp "$ROOT_DIR/src/dev/android/GalleryBenchmarkActivity.java" "$ROOT_DIR/src/dev/android/DevRealGalleryMetrics.java" "$SOURCE_DIR/"
+    python3 "$ROOT_DIR/src/dev/instrument-main.py" "$SOURCE_DIR/MainActivity.java"
+    sed -i '/    <\/application>/i\        <activity android:name="app.rustdl.GalleryBenchmarkActivity" android:exported="true" android:process=":dev_benchmark" android:launchMode="singleTask" android:label="RustDL dev gallery test" android:configChanges="keyboardHidden|orientation|screenSize" />' "$SOURCE_DIR/AndroidManifest.xml"
+    mkdir -p "$BUILD_DIR/apk/assets/dev"
+    cp "$ROOT_DIR/assets/html/index.html" "$ROOT_DIR/assets/html/gallery.html" \
+        "$ROOT_DIR/assets/css/index.css" "$ROOT_DIR/assets/css/appearance.css" \
+        "$ROOT_DIR/assets/js/playback.js" "$ROOT_DIR/src/dev/visual-scroll.js" "$ROOT_DIR/src/dev/visual-smoke.js" "$ROOT_DIR/src/dev/visual-audit.js" "$ROOT_DIR/src/dev/visual-canary.js" "$ROOT_DIR/src/dev/visual-batch500.js" "$ROOT_DIR/src/dev/real-gallery-metrics.js" \
+        "$BUILD_DIR/apk/assets/dev/"
+    cp "$ROOT_DIR/assets/images/aniwaves-rainy-city.webp" "$BUILD_DIR/apk/assets/dev/rainy-city.webp"
+    cp "$ROOT_DIR/assets/images/aniwaves-rainy-city-light.webp" "$BUILD_DIR/apk/assets/dev/rainy-city-light.webp"
+    python3 "$ROOT_DIR/src/dev/prepare-visual.py" "$BUILD_DIR/apk/assets/dev"
+fi
+
+# Keep Java 8 compatibility; silence only newer JDKs' obsolete-option notices.
+javac --release 8 -Xlint:-options -classpath "$ANDROID_JAR" \
     -d "$BUILD_DIR/classes" \
-    "$ANDROID_DIR"/*.java
+    "$SOURCE_DIR"/*.java
 
 d8 --lib "$ANDROID_JAR" --output "$BUILD_DIR/dex" \
     $(find "$BUILD_DIR/classes" -name '*.class' -type f)
 
-aapt2 compile --dir "$ANDROID_DIR/res" -o "$BUILD_DIR/compiled"
-aapt2 link -I "$FRAMEWORK_RES" --manifest "$ANDROID_DIR/AndroidManifest.xml" \
+aapt2 compile --dir "$SOURCE_DIR/res" -o "$BUILD_DIR/compiled"
+aapt2 link -I "$FRAMEWORK_RES" --manifest "$SOURCE_DIR/AndroidManifest.xml" \
     --min-sdk-version 29 --target-sdk-version 35 \
     --version-code "$VERSION_CODE" --version-name "$VERSION_NAME" \
     -o "$BUILD_DIR/rustdl-unsigned.apk" \
@@ -88,6 +139,10 @@ cp "$ROOT_DIR/target/release/librustdl.so" \
     "$BUILD_DIR/apk/lib/arm64-v8a/librustdl.so"
 (cd "$BUILD_DIR/apk" && jar uf "$BUILD_DIR/rustdl-unsigned.apk" \
     classes.dex lib/arm64-v8a/librustdl.so)
+
+if [ "$DEV" = 1 ]; then
+    (cd "$BUILD_DIR/apk" && jar uf "$BUILD_DIR/rustdl-unsigned.apk" assets)
+fi
 
 KEYSTORE=${RUSTDL_KEYSTORE:-"$ANDROID_DIR/debug.keystore"}
 KEY_ALIAS=${RUSTDL_KEY_ALIAS:-androiddebugkey}

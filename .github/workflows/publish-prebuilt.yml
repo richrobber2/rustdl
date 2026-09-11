@@ -1,0 +1,39 @@
+name: Publish verified Android release
+
+on:
+  push:
+    branches: ['release-upload/v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Verify staged release
+        run: python3 android/verify-release.py .release
+      - name: Publish RustDL Next APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(jq -r .tag .release/publish.json)
+          source_commit=$(jq -r .source_commit .release/publish.json)
+          git merge-base --is-ancestor "$source_commit" origin/master
+          test "$(git rev-parse HEAD^)" = "$source_commit"
+          gh release create "$tag" --target "$source_commit" --draft \
+            --title "RustDL $tag" --notes-file .release/notes.md \
+            .release/rustdl-next.apk .release/SHA256SUMS
+          gh release edit "$tag" --draft=false --latest
+      - name: Remove temporary artifact branch
+        run: git push origin --delete "$GITHUB_REF_NAME"

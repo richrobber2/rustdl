@@ -27,6 +27,7 @@ snapshot() {
         find "$ROOT_DIR/src" "$ROOT_DIR/android" -type f \
             \( -name '*.rs' -o -name '*.java' -o -name '*.xml' -o -name '*.sh' \) \
             -exec sha256sum {} +
+        find "$ROOT_DIR/assets" -type f -exec sha256sum {} +
     } | sort | sha256sum | cut -d ' ' -f 1
 }
 
@@ -61,7 +62,7 @@ rebuild_and_reload() {
 
 rebuild_and_reload
 LAST_SNAPSHOT=$(snapshot)
-echo "Watching Rust, Java, XML, and Android scripts. Press Ctrl+C to stop."
+echo "Watching Rust, web assets, Java, XML, and Android scripts. Press Ctrl+C to stop."
 
 while :; do
     sleep 0.75

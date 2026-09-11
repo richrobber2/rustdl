@@ -1,0 +1,1 @@
+document.querySelectorAll('time[data-unix]').forEach(time=>{const date=new Date(Number(time.dataset.unix)*1000);time.textContent=date.toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})});

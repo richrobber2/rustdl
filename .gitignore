@@ -7,3 +7,7 @@
 *.jks
 *.keystore
 .env
+
+/tests/ui/node_modules/
+__pycache__/
+*.pyc

@@ -34,6 +34,8 @@ import android.util.Rational;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -67,7 +69,7 @@ public class MainActivity extends Activity {
             "https?://(?:(?:www|mobile|m)\\.)?(?:x\\.com|twitter\\.com|youtube\\.com|youtu\\.be|snapchat\\.com|aniwaves\\.ru)/\\S+",
             Pattern.CASE_INSENSITIVE);
     private static final String MEDIA_NAME_PATTERN =
-            "(?:[0-9]+-[1-9][0-9]*|youtube-[A-Za-z0-9_-]{11}|snapchat-[A-Za-z0-9_-]{20,160})\\.(?:mp4|m4a)";
+            "(?:[0-9]+-[1-9][0-9]*|youtube-[A-Za-z0-9_-]{11}|snapchat-[A-Za-z0-9_-]{20,160}|anime-[a-f0-9]{24})\\.(?:mp4|m4a)";
 
     static {
         System.loadLibrary("rustdl");
@@ -113,7 +115,7 @@ public class MainActivity extends Activity {
         inspectionMode = isDedicatedInspectionActivity();
         captureInspection = inspectionMode && CAPTURE_INSPECTION_ACTION.equals(action);
         if (!inspectionMode) {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            applyScreenshotPreference();
             if (Build.VERSION.SDK_INT >= 33
                     && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED) {
@@ -137,6 +139,11 @@ public class MainActivity extends Activity {
                 dp(4));
         root.addView(progressBar, progressLayout);
         setContentView(root);
+        if (Build.VERSION.SDK_INT >= 33) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> onBackPressed());
+        }
+        WindowLayout.fitContent(this, root);
 
         if (captureInspection) {
             webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
@@ -159,7 +166,14 @@ public class MainActivity extends Activity {
                 throw new IllegalStateException("Could not clear the previous inspection render");
             }
         }
+        if (!inspectionMode) DownloadNetworkPolicy.get(this);
         nativeStartServer(bind, videoCache.getAbsolutePath(), inspectionMode);
+        if (!inspectionMode) {
+            android.content.IntentFilter filter = new android.content.IntentFilter(AnimeDownloadService.ACTION_SAVED);
+            if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(animeImportReceiver, filter, RECEIVER_NOT_EXPORTED);
+            else registerReceiver(animeImportReceiver, filter);
+            animeImportReceiverRegistered = true;
+        }
         if (!inspectionMode) {
             startRuntimeTuning();
             updateManager = new UpdateManager(this, root, nativeUpdateManifestUrl());
@@ -234,6 +248,7 @@ public class MainActivity extends Activity {
     private void configureWebView() {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(!inspectionMode);
+        settings.setUseWideViewPort(true);
         settings.setDomStorageEnabled(false);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
@@ -368,7 +383,14 @@ public class MainActivity extends Activity {
         return true;
     }
 
-    private void reloadGalleryIfVisible() {
+    private final android.content.BroadcastReceiver animeImportReceiver = new android.content.BroadcastReceiver() {
+        @Override public void onReceive(android.content.Context context, Intent intent) {
+            refreshGalleryIfVisible();
+        }
+    };
+    private boolean animeImportReceiverRegistered;
+
+    private void refreshGalleryIfVisible() {
         if (webView == null) {
             return;
         }
@@ -377,8 +399,9 @@ public class MainActivity extends Activity {
             return;
         }
         Uri current = Uri.parse(currentUrl);
-        if ("127.0.0.1".equals(current.getHost()) && "/".equals(current.getPath())) {
-            webView.reload();
+        if ("127.0.0.1".equals(current.getHost()) && current.getPort() == 37658) {
+            webView.evaluateJavascript(
+                    "window.dispatchEvent(new Event('rustdl:gallery'));", null);
         }
     }
 
@@ -422,6 +445,17 @@ public class MainActivity extends Activity {
         });
     }
 
+    void applyScreenshotPreference() {
+        runOnUiThread(() -> {
+            if (inspectionMode) return;
+            if (SettingsBridge.screenshotsAllowed(this)) {
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            } else {
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            }
+        });
+    }
+
     void applyAppearance(String requestedAppearance) {
         handler.post(() -> {
             String appearance = requestedAppearance == null ? "system" : requestedAppearance;
@@ -429,8 +463,8 @@ public class MainActivity extends Activity {
                     || ("system".equals(appearance)
                     && (getResources().getConfiguration().uiMode
                     & Configuration.UI_MODE_NIGHT_MASK) != Configuration.UI_MODE_NIGHT_YES);
-            getWindow().setStatusBarColor(light ? Color.rgb(238, 242, 248) : Color.rgb(9, 10, 15));
-            getWindow().setNavigationBarColor(light ? Color.rgb(238, 242, 248) : Color.rgb(9, 10, 15));
+            getWindow().setStatusBarColor(light ? Color.rgb(220, 230, 237) : Color.rgb(9, 10, 15));
+            getWindow().setNavigationBarColor(light ? Color.rgb(220, 230, 237) : Color.rgb(9, 10, 15));
             View decor = getWindow().getDecorView();
             int flags = decor.getSystemUiVisibility();
             int lightBars = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
@@ -832,6 +866,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        applyScreenshotPreference();
         if (!inspectionMode) {
             updateRuntimeTuning();
         }
@@ -842,6 +877,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (animeImportReceiverRegistered) unregisterReceiver(animeImportReceiver);
         hideFullscreenView();
         if (connectivityManager != null && networkCallback != null) {
             try {
@@ -936,7 +972,7 @@ public class MainActivity extends Activity {
                 .putBoolean(preferenceKey, true)
                 .putString("published-path:" + displayName, downloadPath)
                 .apply();
-        handler.post(this::reloadGalleryIfVisible);
+        handler.post(this::refreshGalleryIfVisible);
         return false;
     }
 

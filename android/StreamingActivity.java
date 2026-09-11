@@ -1,6 +1,10 @@
 package app.rustdl;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.database.ContentObserver;
+import java.util.LinkedHashMap;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
@@ -42,7 +46,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -88,7 +91,10 @@ public final class StreamingActivity extends Activity {
     private String currentEpisode;
     private int currentSource = -1;
     private int manifestGeneration;
-    private int sourceGeneration;
+    private volatile int sourceGeneration;
+    private final LinkedHashMap<String, String> downloadableSources = new LinkedHashMap<>();
+    private Button downloadButton;
+    private final HashSet<String> hlsDownloads = new HashSet<>();
     private boolean failoverScheduled;
     private boolean pageFinished;
     private boolean bindingEpisodeSelection;
@@ -97,6 +103,7 @@ public final class StreamingActivity extends Activity {
     private String posterUrl = "";
     private String watchlistToken = "";
     private boolean watchlisted;
+    private boolean watchlistBusy;
 
     static boolean isAllowedUrl(String value) {
         if (value == null || value.length() > 500) return false;
@@ -123,11 +130,39 @@ public final class StreamingActivity extends Activity {
                 && uri.getQueryParameter("url") != null;
     }
 
+    private final ContentObserver screenshotObserver = new ContentObserver(new Handler(Looper.getMainLooper())) {
+        @Override public void onChange(boolean selfChange) { applyScreenshotPreference(); }
+    };
+
+    private void applyScreenshotPreference() {
+        boolean allowed = false;
+        try {
+            Bundle result = getContentResolver().call(
+                    Uri.parse("content://" + getPackageName() + ".preferences"), "allowed", null, null);
+            allowed = result != null && result.getBoolean("allowed", false);
+        } catch (RuntimeException unavailable) {
+            // Keep the window protected if consent cannot be read.
+        }
+        if (allowed) {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        } else {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        applyScreenshotPreference();
+    }
+
     @Override
     protected void onCreate(Bundle state) {
         configureWebViewDirectory();
         super.onCreate(state);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        getContentResolver().registerContentObserver(
+                Uri.parse("content://" + getPackageName() + ".preferences"), false, screenshotObserver);
+        applyScreenshotPreference();
         getWindow().setStatusBarColor(Color.rgb(9, 10, 15));
         getWindow().setNavigationBarColor(Color.rgb(9, 10, 15));
 
@@ -264,6 +299,7 @@ public final class StreamingActivity extends Activity {
         shell.addView(playerFrame, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         setContentView(root);
+        WindowLayout.fitContent(this, root);
     }
 
     private Button playerButton(String text) {
@@ -297,9 +333,10 @@ public final class StreamingActivity extends Activity {
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
         cookies.setAcceptThirdPartyCookies(webView, false);
-        webView.setDownloadListener((url, userAgent, disposition, type, length) ->
-                Toast.makeText(this, "Downloads are disabled in streaming mode",
-                        Toast.LENGTH_SHORT).show());
+        webView.setDownloadListener((url, userAgent, disposition, type, length) -> {
+            rememberDownloadSource(url, sourceGeneration, type);
+            Toast.makeText(this, "Use Download episode above the player to save this source", Toast.LENGTH_SHORT).show();
+        });
 
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -332,6 +369,12 @@ public final class StreamingActivity extends Activity {
             }
         });
         webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if ("GET".equals(request.getMethod())) rememberDownloadSource(request.getUrl().toString(), sourceGeneration, "");
+                return null;
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (!request.isForMainFrame()) return false;
@@ -387,8 +430,63 @@ public final class StreamingActivity extends Activity {
         });
     }
 
+    private void rememberDownloadSource(String value, int generation, String mime) {
+        if (value == null || value.length() > 16000) return;
+        Uri uri = Uri.parse(value);
+        String path = uri.getPath() == null ? "" : uri.getPath().toLowerCase(Locale.ROOT);
+        String type = mime == null ? "" : mime.toLowerCase(Locale.ROOT);
+        final boolean hls = path.endsWith(".m3u8") || type.contains("mpegurl");
+        if (!isSafePlayerUri(uri) || !(path.endsWith(".mp4") || hls || type.startsWith("video/mp4"))) return;
+        if (path.endsWith("/init.mp4")) return;
+        final String key = uri.getHost() + path;
+        runOnUiThread(() -> {
+            if (generation != sourceGeneration || currentSource < 0) return;
+            if (downloadableSources.size() < 12 || downloadableSources.containsKey(key)) {
+                String previous = downloadableSources.put(key, value);
+                hlsDownloads.remove(previous);
+                if (hls) hlsDownloads.add(value);
+            }
+        });
+    }
+
+    private void chooseEpisodeDownload() {
+        if (currentEpisode == null || currentSource < 0 || downloadableSources.isEmpty()) {
+            Toast.makeText(this, "Start the episode first, then tap Download. If no source appears, try another server.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        final ArrayList<String> candidates = new ArrayList<>();
+        for (String value : downloadableSources.values()) if (hlsDownloads.contains(value)) candidates.add(value);
+        if (candidates.isEmpty()) candidates.addAll(downloadableSources.values());
+        final HashSet<String> hlsChoices = new HashSet<>(hlsDownloads);
+        final String episode = currentEpisode;
+        final String title = streamTitle + " · episode " + episode;
+        final Source selectedSource = sources.get(currentSource);
+        final String identity = watchUrl + "\n" + episode + "\n" + selectedSource.language;
+        final String referer = selectedSource.url;
+        final String agent = webView.getSettings().getUserAgentString();
+        String[] labels = new String[candidates.size()];
+        for (int i = 0; i < labels.length; i++) {
+            Uri uri = Uri.parse(candidates.get(i));
+            labels[i] = (hlsDownloads.contains(candidates.get(i)) ? "HLS" : "MP4") + " · " + uri.getHost() + (labels.length > 1 ? " · " + (i + 1) : "");
+        }
+        new AlertDialog.Builder(this).setTitle("Download episode " + episode)
+                .setItems(labels, (dialog, index) -> {
+                    String value = candidates.get(index);
+                    Intent request = new Intent(this, AnimeDownloadService.class)
+                            .putExtra("url", value).putExtra("identity", identity).putExtra("title", title)
+                            .putExtra("referer", referer).putExtra("userAgent", agent)
+                            .putExtra("cookie", CookieManager.getInstance().getCookie(value))
+                            .putExtra("hls", hlsChoices.contains(value));
+                    startForegroundService(request);
+                    Toast.makeText(this, "Episode download started. Progress is in notifications.", Toast.LENGTH_LONG).show();
+                }).setNegativeButton("Cancel", null).show();
+    }
+
     private void loadManifest(String episode, boolean refresh) {
         int generation = ++manifestGeneration;
+        sourceGeneration++;
+        downloadableSources.clear();
+        hlsDownloads.clear();
         showStatus("Checking primary and backup streams…");
         sourceButtons.removeAllViews();
         episodeSpinner.setEnabled(false);
@@ -454,7 +552,7 @@ public final class StreamingActivity extends Activity {
         try {
             currentEpisode = manifest.getString("episode");
             streamTitle = manifest.optString("title", "AniWaves");
-            posterUrl = manifest.optString("posterUrl", "");
+            posterUrl = StreamingWatchlist.optionalString(manifest, "posterUrl");
             watchlistToken = manifest.optString("watchlistToken", "");
             watchlisted = manifest.optBoolean("watchlisted", false);
             titleView.setText(streamTitle);
@@ -509,6 +607,11 @@ public final class StreamingActivity extends Activity {
     private void renderFilterButtons() {
         if (filterButtons == null) return;
         filterButtons.removeAllViews();
+        downloadButton = playerButton("↓ Download episode");
+        downloadButton.setTextSize(12);
+        downloadButton.setContentDescription("Download the current episode for offline playback");
+        downloadButton.setOnClickListener(view -> chooseEpisodeDownload());
+        filterButtons.addView(downloadButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)));
         if (!watchlistToken.isEmpty()) {
             Button save = playerButton(watchlisted ? "✓ Watchlist" : "＋ Watchlist");
             save.setTextSize(12);
@@ -521,6 +624,7 @@ public final class StreamingActivity extends Activity {
                     ? Color.rgb(7, 17, 15)
                     : Color.rgb(223, 229, 239));
             save.setOnClickListener(this::toggleWatchlist);
+            save.setEnabled(!watchlistBusy);
             LinearLayout.LayoutParams saveLayout = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, dp(36));
             saveLayout.setMarginEnd(dp(12));
@@ -548,9 +652,18 @@ public final class StreamingActivity extends Activity {
     }
 
     private void toggleWatchlist(View view) {
+        if (watchlistBusy) return;
         Button button = (Button) view;
-        button.setEnabled(false);
         String action = watchlisted ? "remove" : "add";
+        final String body;
+        try {
+            body = StreamingWatchlist.form(watchlistToken, action, watchUrl, streamTitle, posterUrl);
+        } catch (IOException error) {
+            Toast.makeText(this, "Could not prepare watchlist update", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        watchlistBusy = true;
+        button.setEnabled(false);
         new Thread(() -> {
             HttpURLConnection connection = null;
             try {
@@ -558,12 +671,6 @@ public final class StreamingActivity extends Activity {
                         .path("/__app/watchlist")
                         .clearQuery()
                         .build();
-                String body = formPart("token", watchlistToken)
-                        + "&" + formPart("action", action)
-                        + "&" + formPart("url", watchUrl)
-                        + "&" + formPart("title", streamTitle)
-                        + "&" + formPart("poster", posterUrl)
-                        + "&response=json";
                 byte[] encoded = body.getBytes(StandardCharsets.UTF_8);
                 connection = (HttpURLConnection) new URL(endpoint.toString()).openConnection();
                 connection.setConnectTimeout(10_000);
@@ -582,12 +689,10 @@ public final class StreamingActivity extends Activity {
                 InputStream input = status >= 400
                         ? connection.getErrorStream()
                         : connection.getInputStream();
-                JSONObject response = new JSONObject(readLimited(input));
-                if (status != 200 || !response.optBoolean("ok", false)) {
-                    throw new IOException(response.optString("error", "Watchlist update failed"));
-                }
-                boolean saved = response.optBoolean("watchlisted", false);
+                boolean saved = StreamingWatchlist.saved(status, readLimited(input));
                 runOnUiThread(() -> {
+                    watchlistBusy = false;
+                    if (isFinishing() || isDestroyed()) return;
                     watchlisted = saved;
                     renderFilterButtons();
                     Toast.makeText(this, saved ? "Saved to watchlist" : "Removed from watchlist",
@@ -595,18 +700,16 @@ public final class StreamingActivity extends Activity {
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
-                    button.setEnabled(true);
-                    Toast.makeText(this, "Could not update watchlist", Toast.LENGTH_SHORT).show();
+                    watchlistBusy = false;
+                    if (isFinishing() || isDestroyed()) return;
+                    renderFilterButtons();
+                    Toast.makeText(this, error.getMessage() == null
+                            ? "Could not update watchlist" : error.getMessage(), Toast.LENGTH_LONG).show();
                 });
             } finally {
                 if (connection != null) connection.disconnect();
             }
         }, "rustdl-watchlist").start();
-    }
-
-    private static String formPart(String name, String value) throws Exception {
-        return URLEncoder.encode(name, StandardCharsets.UTF_8.name()) + "="
-                + URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8.name());
     }
 
     private String filterLabel(String filter) {
@@ -690,6 +793,8 @@ public final class StreamingActivity extends Activity {
         currentSource = index;
         attemptedSources.add(index);
         sourceGeneration++;
+        downloadableSources.clear();
+        hlsDownloads.clear();
         failoverScheduled = false;
         pageFinished = false;
         Source source = sources.get(index);
@@ -881,6 +986,7 @@ public final class StreamingActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        getContentResolver().unregisterContentObserver(screenshotObserver);
         manifestGeneration++;
         sourceGeneration++;
         handler.removeCallbacksAndMessages(null);

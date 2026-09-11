@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RustDL settings</title>
+  <style>{page_css}</style>
+</head>
+<body>
+  <main>
+    <div class="top"><div><span class="eyebrow">APK-local preferences</span><h1>Settings.</h1><p>Make RustDL fit this phone. Changes are saved inside the app.</p></div><a href="/">← Gallery</a></div>
+    <form id="settings-form">
+      <section class="card">
+        <label for="download-folder">Completed download folder</label>
+        <div class="folder"><span>Downloads /&nbsp;</span><input id="download-folder" type="text" maxlength="48" autocomplete="off" spellcheck="false" required></div>
+        <div id="destination" class="destination">Downloads/RustDL</div>
+        <p class="hint">Applies to newly exported files. Existing exports stay where they are; RustDL’s streamable working cache remains private to the app.</p>
+      </section>
+      <section class="card"><label class="label" for="mobile-downloads">Downloads on mobile data</label><select id="mobile-downloads"><option value="allow">Allow downloads</option><option value="ask">Ask before downloading</option><option value="block">Block downloads</option></select><p class="hint">Applies to the download queue and episode downloads, including in the background. Metered Wi-Fi also counts as mobile data. Ask waits for approval from the queue; Block waits for an unmetered connection. Existing downloads resume automatically when allowed.</p></section>
+      <section class="card switch-row">
+        <div class="switch-copy"><strong>Keep screen awake during playback</strong><small>Prevents the display from sleeping only while media is actively playing.</small></div>
+        <label class="switch"><input id="keep-awake" type="checkbox"><i aria-hidden="true"></i><span hidden>Keep screen awake</span></label>
+      </section>
+      <section class="card switch-row">
+        <div class="switch-copy"><strong>Allow screenshots</strong><small>Off by default. Enabling also permits screen recording and app previews. Applies after saving.</small></div>
+        <label class="switch"><input id="allow-screenshots" type="checkbox"><i aria-hidden="true"></i><span hidden>Allow screenshots</span></label>
+      </section>
+      <section class="card">
+        <label class="label" for="appearance">Appearance</label>
+        <select id="appearance"><option value="system">Follow system</option><option value="dark">Dark</option><option value="light">Light</option></select>
+        <p class="hint">The quick theme button on every page switches directly between light and dark.</p>
+      </section>
+      <section class="card">
+        <label class="label" for="background-theme">Background theme</label>
+        <select id="background-theme"><option value="space">Space (default)</option><option value="rainy-city">Rainy City</option></select>
+        <p class="hint">Rainy City adds gentle scrolling depth and a sunrise or sunset when switching appearance. Reduced motion keeps the background still. Preview your choice, then save settings.</p>
+      </section>
+      <section class="card switch-row">
+        <div class="switch-copy"><strong>Reduce motion</strong><small>Stops sunrise and sunset animations, parallax, and moving backgrounds. Preview now, then save. When off, the phone’s reduced-motion preference still applies.</small></div>
+        <label class="switch"><input id="reduce-motion" type="checkbox"><i aria-hidden="true"></i><span hidden>Reduce motion</span></label>
+      </section>
+      <section class="card switch-row">
+        <div class="switch-copy"><strong>Moving space background</strong><small>Uses layered transform-only star fields and stops automatically with reduced motion.</small></div>
+        <label class="switch"><input id="space-effect" type="checkbox"><i aria-hidden="true"></i><span hidden>Moving space background</span></label>
+      </section>
+      <section class="card">
+        <label class="label" for="diagnostics-refresh">Diagnostics refresh rate</label>
+        <select id="diagnostics-refresh"><option value="3">Every 3 seconds</option><option value="5">Every 5 seconds</option><option value="10">Every 10 seconds</option><option value="30">Every 30 seconds</option></select>
+        <p class="hint">A slower interval uses slightly less battery while the Diagnostics page is open.</p>
+      </section>
+      <div class="actions"><button class="primary" id="save" type="submit">Save settings</button><button id="reset" type="button">Restore defaults</button></div>
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+    </form>
+  </main>
+  <script>{page_script}</script>
+  <!--DEV_RELOAD-->
+</body>
+</html>

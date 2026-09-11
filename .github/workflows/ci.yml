@@ -20,3 +20,5 @@ jobs:
         run: cargo fmt --check
       - name: Test
         run: cargo test --release
+      - name: Test network policy in isolation
+        run: cargo test --release native_network_policy -- --ignored --test-threads=1

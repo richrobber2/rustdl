@@ -20,6 +20,7 @@ public final class DownloadService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        DownloadNetworkPolicy.get(this);
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
@@ -57,6 +58,11 @@ public final class DownloadService extends Service {
         String detail = total > 0
                 ? formatBytes(downloaded) + " of " + formatBytes(total)
                 : formatBytes(downloaded) + " saved";
+        int networkState = DownloadNetworkPolicy.get(this).state();
+        if (networkState != 0) {
+            title = count == 1 ? "1 download waiting" : count + " downloads waiting";
+            detail = DownloadNetworkPolicy.reason(networkState);
+        }
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL_ID)
                 : new Notification.Builder(this);

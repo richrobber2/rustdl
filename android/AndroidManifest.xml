@@ -18,6 +18,10 @@
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:usesCleartextTraffic="true">
         <service
+            android:name="app.rustdl.AnimeDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
             android:name="app.rustdl.DownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
@@ -86,5 +90,7 @@
                 <data android:mimeType="text/*" />
             </intent-filter>
         </activity>
+        <provider android:name="app.rustdl.ScreenshotPreferencesProvider"
+            android:authorities="app.rustdl.preferences" android:exported="false" />
     </application>
 </manifest>

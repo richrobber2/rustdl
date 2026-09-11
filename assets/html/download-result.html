@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{heading}</title>
+<link rel="stylesheet" href="{player_css}"></head><body><main class="player-shell">
+<div class="topline"><a class="brand" href="/"><span class="brand-mark">↓</span><span>RustDL</span></a><span class="context-pill"><i></i>{status}</span></div>
+<header><span class="eyebrow">Download status</span><h1>{heading}</h1><p class="copy">{detail}</p></header>
+<section class="player-frame" style="view-transition-name:{transition_name}"><div class="player-toolbar"><span>{toolbar}</span><div class="player-actions"><button class="player-control" type="button" data-player-speed>1×</button><button class="player-control" type="button" data-player-rotation aria-pressed="false">Lock rotation</button><button class="player-control" type="button" data-player-pip>PiP</button><span class="codec">MP4</span></div></div><video controls playsinline preload="auto" data-filename="{filename}" data-growing="{growing}" src="/{media_route}/{filename}">Your browser does not support HTML5 video.</video><span class="seek-toast" aria-live="polite"></span></section>
+<div class="meta-card"><div class="file-block"><span class="meta-label">Download target</span><code>{saved_path}</code></div><a class="action" href="/"><span>▦</span>Open gallery</a></div>
+</main>{playback_script}{view_transition_script}{dev_reload}</body></html>

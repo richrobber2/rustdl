@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rustdl — video downloader</title>
+  <!--INDEX_STYLESHEET-->
+</head>
+<body>
+  <main class="home-shell">
+    <!--MODE_SWITCH-->
+    <!--INSPECTION_BANNER-->
+    <div class="badge">Built with Rust</div>
+    <h1>Save a video.</h1>
+    <p>Paste X posts, threads, profiles, YouTube videos or playlists, Snapchat Spotlight links, or browse AniWaves as a streaming-only catalog.</p>
+    <form id="downloader" action="/discover" method="get">
+      <label for="source">X, YouTube, Snapchat, or AniWaves links</label>
+      <div class="controls">
+        <textarea id="source" name="source" rows="3" inputmode="url"
+          placeholder="Post, playlist, Short, Spotlight, or streaming catalog" required></textarea>
+        <button type="submit">Find videos</button>
+      </div>
+    </form>
+    <div class="tool-links"><a class="queue-link" href="/streaming">AniWaves streaming →</a><a class="queue-link" id="activity-link" href="/activity">Activity <span class="activity-count" id="activity-count" hidden></span> →</a><a class="queue-link" href="/queue">Download queue →</a><a class="queue-link" href="/storage">Storage manager →</a><a class="queue-link" href="/peers">Device transfer →</a><a class="queue-link" href="/diagnostics">Diagnostics →</a><a class="queue-link" href="/settings">Settings →</a><a class="queue-link" href="/changelog">What’s new →</a></div>
+    <p class="fine-print">Public posts only. Download media you have permission to save.</p>
+    <!--SAVED_VIDEOS-->
+  </main>
+  <!--PLAYBACK_SCRIPT-->
+  <!--VIEW_TRANSITIONS-->
+  <!--DEV_RELOAD-->
+</body>
+</html>

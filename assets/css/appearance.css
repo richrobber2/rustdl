@@ -1,0 +1,356 @@
+
+  :root {
+    --rustdl-page: #090a0f;
+    --rustdl-page-background-image: linear-gradient(#05070ca8, #05070ca8), url("__RUSTDL_DARK_SPACE_BACKGROUND__");
+    --rustdl-shell: linear-gradient(145deg, #171a24ed, #0e1018f5);
+    --rustdl-shell-shadow: 0 32px 100px #000a, inset 0 1px #ffffff0d;
+    --rustdl-surface: #11131bf2;
+    --rustdl-surface-soft: #090b11;
+    --rustdl-surface-border: #ffffff20;
+    --rustdl-surface-shadow: 0 10px 30px #0005;
+    --rustdl-text: #f7f7f8;
+    --rustdl-muted: #9ca3b3;
+    --rustdl-faint: #7f8798;
+    --rustdl-control-text: #dfe5ef;
+    --rustdl-control: #181b24;
+    --rustdl-control-hover: #232833;
+    --rustdl-control-shadow: 0 3px 10px #0003;
+    --rustdl-input: #080a10;
+    --rustdl-input-border: #ffffff28;
+    --rustdl-input-shadow: inset 0 1px 2px #0003;
+    --rustdl-placeholder: #7b8393;
+    --rustdl-accent: #70dfc9;
+    --rustdl-accent-ink: #07110f;
+    --rustdl-accent-soft: #70dfc914;
+    --rustdl-accent-border: #70dfc944;
+    --rustdl-accent-shadow: 0 6px 16px #70dfc930;
+    --rustdl-selected: #13201f;
+    --rustdl-danger: #ffaaa5;
+    --rustdl-danger-fill: #b94f59;
+    --rustdl-danger-soft: #ff706b12;
+    --rustdl-danger-ink: #fff;
+    --rustdl-warning: #ffd08a;
+    --rustdl-disabled: #343946;
+    --rustdl-disabled-text: #7f8798;
+    --rustdl-track: #ffffff18;
+    --rustdl-focus: #70dfc938;
+    --rustdl-floating: #07090dcc;
+    --rustdl-floating-text: #fff;
+    --rustdl-floating-shadow: 0 8px 24px #0007;
+    --rustdl-popover: #11141df5;
+    --rustdl-popover-text: #e8ebf2;
+    --rustdl-popover-shadow: 0 24px 70px #000b;
+    --rustdl-grid-opacity: .18;
+    --rustdl-space-opacity: .48;
+    --rustdl-space-star: #dceaff;
+    --rustdl-space-glow: #89a8ff;
+    --rustdl-media: #090b10;
+    --rustdl-media-text: #f7f7fb;
+    --rustdl-media-muted: #aeb5c4;
+    --rustdl-media-control: #ffffff0a;
+    --rustdl-media-border: #ffffff20;
+    --rustdl-media-track: #ffffff3d;
+    --rustdl-media-accent: #70dfc9;
+    --rustdl-media-accent-ink: #07110f;
+  }
+  :root[data-theme="dark"] { color-scheme: dark; }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --rustdl-page: #dce6ed;
+    --rustdl-page-background-image: radial-gradient(ellipse at 10% 0, #d8e1f2 0, transparent 45rem), radial-gradient(ellipse at 100% 100%, #c4dfd8 0, transparent 38rem);
+    --rustdl-shell: linear-gradient(145deg, #e8eff5ed, #dce8eae8);
+    --rustdl-shell-shadow: 0 18px 48px #203f561c, inset 0 1px #ffffff80;
+    --rustdl-surface: #fffdf7;
+    --rustdl-surface-soft: #e9eff2;
+    --rustdl-surface-border: #7894a54d;
+    --rustdl-surface-shadow: 0 2px 5px #17384c0a, 0 9px 22px #17384c12;
+    --rustdl-text: #173247;
+    --rustdl-muted: #455c6d;
+    --rustdl-faint: #586d7c;
+    --rustdl-control-text: #254759;
+    --rustdl-control: #dce9ed;
+    --rustdl-control-hover: #c8dedf;
+    --rustdl-control-shadow: 0 1px 2px #17384c12;
+    --rustdl-input: #f3f7fa;
+    --rustdl-input-border: #849eaf;
+    --rustdl-input-shadow: inset 0 1px 3px #203f5610;
+    --rustdl-placeholder: #5e7281;
+    --rustdl-accent: #086b60;
+    --rustdl-accent-ink: #fff;
+    --rustdl-accent-soft: #d7eee6;
+    --rustdl-accent-border: #408d7e80;
+    --rustdl-accent-shadow: 0 4px 12px #086b6024;
+    --rustdl-selected: #cce8df;
+    --rustdl-danger: #b42336;
+    --rustdl-danger-fill: #b42336;
+    --rustdl-danger-soft: #fff0f2;
+    --rustdl-warning: #946014;
+    --rustdl-disabled: #d9e1e6;
+    --rustdl-disabled-text: #5c6f7c;
+    --rustdl-track: #c3d2dc;
+    --rustdl-focus: #086b6033;
+    --rustdl-floating: #edf4f7;
+    --rustdl-floating-text: #173247;
+    --rustdl-floating-shadow: 0 8px 22px #152c4f35;
+    --rustdl-popover: #fffdf7;
+    --rustdl-popover-text: #173247;
+    --rustdl-popover-shadow: 0 24px 64px #1d35572f;
+    --rustdl-grid-opacity: 0;
+    --rustdl-space-opacity: .07;
+    --rustdl-space-star: #2950a3;
+    --rustdl-space-glow: #7255bd;
+  }
+  body { isolation: isolate; }
+  body::after {
+    content: ""; position: fixed; z-index: -1; inset: -45vh -45vw; pointer-events: none; opacity: var(--rustdl-space-opacity);
+    background-image:
+      radial-gradient(circle, var(--rustdl-space-star) 0 1px, transparent 1.5px),
+      radial-gradient(circle, var(--rustdl-space-glow) 0 1.4px, transparent 2px),
+      radial-gradient(circle, var(--rustdl-space-star) 0 .7px, transparent 1.2px);
+    background-position: 0 0, 37px 61px, 83px 19px;
+    background-size: 89px 89px, 137px 137px, 53px 53px;
+    transform: translate3d(-3%, -2%, 0) rotate(.001deg); will-change: transform;
+    animation: rustdl-space-drift 95s linear infinite;
+  }
+  :root[data-space="off"] body::after, body.pip::after { display: none; }
+  :root[data-space-paused="true"] body::after { animation-play-state: paused; }
+  @keyframes rustdl-space-drift { to { transform: translate3d(7%, 6%, 0) rotate(.001deg); } }
+  .rustdl-theme-toggle {
+    position: fixed; z-index: 2147483000; left: max(.65rem, env(safe-area-inset-left)); bottom: max(.65rem, env(safe-area-inset-bottom));
+    display: grid; place-items: center; width: 2.75rem !important; min-width: 2.75rem; height: 2.75rem !important; min-height: 2.75rem;
+    margin: 0 !important; padding: 0 !important; border: 1px solid var(--rustdl-surface-border) !important; border-radius: 50% !important;
+    color: var(--rustdl-control-text) !important; background: var(--rustdl-control) !important; box-shadow: var(--rustdl-control-shadow) !important;
+    backdrop-filter: blur(16px); font: 800 1rem/1 system-ui !important; cursor: pointer;
+  }
+  .rustdl-theme-toggle:focus-visible { outline: 3px solid var(--rustdl-accent); outline-offset: 3px; }
+  body.pip .rustdl-theme-toggle { display: none; }
+  :root[data-theme] {
+    background-color: var(--rustdl-page) !important;
+    background-image: var(--rustdl-page-background-image) !important;
+    background-position: center !important;
+    background-size: cover !important;
+    background-repeat: no-repeat !important;
+    background-attachment: fixed !important;
+  }
+  :root[data-theme] body {
+    color: var(--rustdl-text) !important;
+    background: transparent !important;
+  }
+  :root[data-theme] body::before { opacity: var(--rustdl-grid-opacity); }
+  :root[data-theme] body.pip { background: #000 !important; }
+  :root[data-theme] :is(.home-shell, .player-shell) {
+    color: var(--rustdl-text) !important; border-color: var(--rustdl-surface-border) !important;
+    background: var(--rustdl-shell) !important; box-shadow: var(--rustdl-shell-shadow) !important;
+  }
+  :root[data-theme] :is(
+    .card, .panel, article, .media-card, .quality-card, .candidate, .empty, .metric, .item, .system,
+    .metrics > div, .gallery-tools, .playlist-tools, .selection-bar, .batch-format, .queue-mini,
+    .meta-card, .toolbar, .jump, .notice
+  ) {
+    color: var(--rustdl-text) !important; border-color: var(--rustdl-surface-border) !important;
+    background: var(--rustdl-surface) !important; box-shadow: var(--rustdl-surface-shadow) !important;
+  }
+  :root[data-theme] :is(.health div, .system-row, .media-row, .pair code, .panel article, .panel li) {
+    color: var(--rustdl-text) !important; border-color: var(--rustdl-surface-border) !important;
+    background: var(--rustdl-surface-soft) !important; box-shadow: none !important;
+  }
+  :root[data-theme] :is(h1, h2, h3, strong, label, code, .media-title, .value, .file-block) { color: var(--rustdl-text) !important; }
+  :root[data-theme] :is(
+    p, small, ul, .hint, .copy, .status, .size, .sub, .media-file, .library-count,
+    .gallery-filter-status, .fine-print, .queue-mini-info span, .candidate-copy span,
+    .candidate-copy code, .metric span, .system-row span, .release-actions > span, .value.unavailable
+  ) { color: var(--rustdl-muted) !important; }
+  :root[data-theme] :is(.gallery-filter-status, .release-actions > span, .value.unavailable) { color: var(--rustdl-faint) !important; }
+  :root[data-theme] :is(.eyebrow, .phase, .media-state, .badge, .queue-link, .quality, .live, .destination, .selection-bar strong, .folder span) {
+    color: var(--rustdl-accent) !important;
+  }
+  :root[data-theme] input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+  :root[data-theme] textarea, :root[data-theme] select, :root[data-theme] .folder {
+    color: var(--rustdl-text) !important; border-color: var(--rustdl-input-border) !important;
+    background: var(--rustdl-input) !important; box-shadow: var(--rustdl-input-shadow) !important;
+  }
+  :root[data-theme] :is(input, textarea)::placeholder { color: var(--rustdl-placeholder) !important; opacity: 1; }
+  :root[data-theme] :is(input, textarea, select):focus {
+    border-color: var(--rustdl-accent) !important; box-shadow: 0 0 0 3px var(--rustdl-focus) !important;
+  }
+  :root[data-theme] button:not(.rustdl-theme-toggle):not(.card-menu-button):not(.control-button):not(.player-control),
+  :root[data-theme] :is(.top > a, header > a, .back, nav a, .secondary, .action, .goto, .mode-switch, .collection-nav a) {
+    color: var(--rustdl-control-text) !important; border-color: var(--rustdl-surface-border) !important; background: var(--rustdl-control) !important;
+    box-shadow: var(--rustdl-control-shadow) !important;
+  }
+  :root[data-theme] button:not(.rustdl-theme-toggle):not(.card-menu-button):not(.control-button):not(.player-control):hover,
+  :root[data-theme] :is(.top > a, header > a, .back, nav a, .secondary, .action, .goto, .mode-switch, .collection-nav a):hover {
+    color: var(--rustdl-text) !important; border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-control-hover) !important;
+  }
+  :root[data-theme] :is(
+    .primary, #downloader button[type="submit"], form > button[type="submit"], .selection-bar button[type="submit"],
+    .filters button.active, #version-go, .panel > .actions button, .current, .activity-count, .queue-mini > a
+  ) {
+    color: var(--rustdl-accent-ink) !important; border-color: var(--rustdl-accent) !important; background: var(--rustdl-accent) !important;
+    box-shadow: var(--rustdl-accent-shadow) !important;
+  }
+  :root[data-theme] button:disabled { color: var(--rustdl-disabled-text) !important; background: var(--rustdl-disabled) !important; box-shadow: none !important; }
+  :root[data-theme] :is(button, a, input, textarea, select):focus-visible { outline: 3px solid var(--rustdl-focus); outline-offset: 2px; }
+  :root[data-theme] :is(.progress, .bar, .queue-mini-progress) { background: var(--rustdl-track) !important; }
+  :root[data-theme] :is(.error, .batch-error, .status.error, .live.offline, .live.error, .danger) { color: var(--rustdl-danger) !important; }
+  :root[data-theme] .batch-error { border: 1px solid var(--rustdl-danger); background: var(--rustdl-danger-soft) !important; }
+  :root[data-theme] :is(.warning, .badge.warning) { color: var(--rustdl-warning) !important; }
+  :root[data-theme] .switch i { background: var(--rustdl-disabled) !important; }
+  :root[data-theme] .switch input:checked + i { background: var(--rustdl-accent) !important; }
+  :root[data-theme] .candidate:has(input:checked) { border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-selected) !important; }
+  :root[data-theme] .check { border-color: var(--rustdl-input-border) !important; background: var(--rustdl-surface-soft) !important; }
+  :root[data-theme] .candidate input:checked + .check { color: var(--rustdl-accent-ink) !important; border-color: var(--rustdl-accent) !important; background: var(--rustdl-accent) !important; }
+  :root[data-theme] .gallery-filters button {
+    color: var(--rustdl-control-text) !important; border-color: var(--rustdl-surface-border) !important; background: var(--rustdl-surface-soft) !important;
+    box-shadow: var(--rustdl-control-shadow) !important;
+  }
+  :root[data-theme] .gallery-filters button:hover { color: var(--rustdl-text) !important; border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-control-hover) !important; }
+  :root[data-theme] .gallery-filters button[aria-pressed="true"] {
+    color: var(--rustdl-accent-ink) !important; border-color: var(--rustdl-accent) !important; background: var(--rustdl-accent) !important;
+    box-shadow: var(--rustdl-accent-shadow) !important;
+  }
+  :root[data-theme] .card-menu-button {
+    color: var(--rustdl-floating-text) !important; border-color: var(--rustdl-surface-border) !important; background: var(--rustdl-floating) !important;
+    box-shadow: var(--rustdl-floating-shadow) !important;
+  }
+  :root[data-theme] .card-menu-button:hover, :root[data-theme] .card-menu-button:focus-visible {
+    color: var(--rustdl-accent-ink) !important; border-color: var(--rustdl-accent) !important; background: var(--rustdl-accent) !important;
+  }
+  :root[data-theme] .card-popover {
+    color: var(--rustdl-popover-text) !important; border-color: var(--rustdl-surface-border) !important; background: var(--rustdl-popover) !important;
+    box-shadow: var(--rustdl-popover-shadow) !important;
+  }
+  :root[data-theme] .card-popover :is(a, button) { color: var(--rustdl-popover-text) !important; background: transparent !important; }
+  :root[data-theme] .card-popover :is(a, button):is(:hover, :focus-visible) { color: var(--rustdl-accent-ink) !important; background: var(--rustdl-accent) !important; }
+  :root[data-theme] .card-popover .danger { color: var(--rustdl-danger) !important; }
+  :root[data-theme] .card-popover .danger:is(:hover, :focus-visible) { color: var(--rustdl-danger-ink) !important; background: var(--rustdl-danger-fill) !important; }
+  :root[data-theme] :is(.collection-nav a, .mode-switch) {
+    color: var(--rustdl-accent) !important; border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-accent-soft) !important;
+    box-shadow: var(--rustdl-control-shadow) !important;
+  }
+  :root[data-theme] :is(.media-thumb, .player-frame, .synthetic-video, .mini-player-dock, .control-island, .control-popover) {
+    color: var(--rustdl-media-text) !important; border-color: var(--rustdl-media-border) !important; background-color: var(--rustdl-media) !important;
+  }
+  :root[data-theme] :is(.control-button, .player-control, .control-popover button, .mini-player-footer button) {
+    color: var(--rustdl-media-text) !important; border-color: var(--rustdl-media-border) !important; background: var(--rustdl-media-control) !important; box-shadow: none !important;
+  }
+  :root[data-theme] :is(.control-button, .player-control):is(:hover, [aria-pressed="true"]),
+  :root[data-theme] .control-popover button.active {
+    color: var(--rustdl-media-accent-ink) !important; border-color: var(--rustdl-media-accent) !important; background: var(--rustdl-media-accent) !important;
+  }
+  :root[data-theme] :is(.player-toolbar, .download-label, .mini-player-title, .control-island .control-time) { color: var(--rustdl-media-text) !important; }
+  :root[data-theme] .control-detail { color: var(--rustdl-media-muted) !important; background: var(--rustdl-media-control) !important; }
+  :root[data-theme] :is(.timeline-track, .timeline-downloaded, .watch-progress) { background-color: var(--rustdl-media-track) !important; }
+  :root[data-theme] .brand { color: var(--rustdl-text) !important; }
+  :root[data-theme] .context-pill { color: var(--rustdl-muted) !important; border-color: var(--rustdl-surface-border) !important; background: var(--rustdl-surface-soft) !important; }
+  :root[data-theme] .meta-card .action { color: var(--rustdl-accent) !important; border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-accent-soft) !important; }
+  :root[data-theme] .version-link { color: var(--rustdl-text) !important; border: 0 !important; background: transparent !important; box-shadow: none !important; }
+  :root[data-theme] article:target { border-color: var(--rustdl-accent-border) !important; box-shadow: 0 0 0 3px var(--rustdl-focus), var(--rustdl-surface-shadow) !important; }
+  :root[data-theme] .release-actions { border-color: var(--rustdl-surface-border) !important; }
+  :root[data-theme] .goto { color: var(--rustdl-accent) !important; border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-accent-soft) !important; }
+  :root[data-theme] .media-card { overflow: hidden; }
+  @media (prefers-reduced-motion: reduce) { body::after { animation: none; transform: none; } }
+
+/* Shared form sizing for narrow windows and enlarged Android text. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+main, form, fieldset, label { min-width: 0; }
+input:not([type=checkbox]):not([type=radio]):not([type=range]), textarea, select {
+  box-sizing: border-box; min-width: 0; max-width: 100%;
+}
+textarea { overflow-wrap: anywhere; }
+button, label, p, h1, h2 { overflow-wrap: anywhere; }
+button { white-space: normal; }
+@supports (min-height: 100dvh) { body { min-height: 100dvh; } }
+@media (max-width: 30rem) {
+  .top, .actions, .confirm-actions { flex-wrap: wrap; }
+  .folder { grid-template-columns: minmax(0, 1fr); }
+  .folder span { white-space: normal; overflow-wrap: anywhere; padding: .65rem .9rem 0; }
+  .batch-format, .quality-card { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-height: 32rem) {
+  .playlist-tools, .batch-format { position: static; }
+}
+
+:root[data-background="rainy-city"] { --rustdl-page-background-image: linear-gradient(#050a1426,#050a1459),url("__RUSTDL_RAINY_CITY_BACKGROUND__"); }
+:root[data-background="rainy-city"][data-theme="light"] { --rustdl-page-background-image: url("__RUSTDL_RAINY_CITY_LIGHT_BACKGROUND__"); }
+:root[data-background="rainy-city"] body::after { display:none; }
+
+:root[data-theme="light"] .tool-links a {
+  padding:.55rem .75rem;border:1px solid var(--rustdl-accent-border);border-radius:10px;
+  background:var(--rustdl-accent-soft);text-decoration:none;
+}
+:root[data-theme="light"] .tool-links { gap:.5rem; }
+:root[data-theme="light"] :is(.stream-top,.gallery-tools,.playlist-tools,.batch-format) {
+  backdrop-filter:none;background:var(--rustdl-control) !important;
+}
+:root[data-theme="light"] .stream-card { box-shadow:var(--rustdl-surface-shadow); }
+
+/* Let the city show between gallery cards rather than behind a single large panel. */
+:root[data-background="rainy-city"][data-theme] .home-shell {
+  background:transparent !important;
+  border-color:transparent !important;
+  box-shadow:none !important;
+  backdrop-filter:none;
+}
+:root[data-background="rainy-city"][data-theme] .library-head {
+  padding:.65rem .8rem;
+  border-radius:12px;
+  background:var(--rustdl-surface);
+}
+:root[data-background="rainy-city"][data-theme="light"] .home-shell > :is(h1,p,.badge),
+:root[data-background="rainy-city"][data-theme="light"] #downloader > label {
+  text-shadow:0 1px 3px #fff,0 0 12px #ffffffb3;
+}
+:root[data-background="rainy-city"][data-theme="dark"] .home-shell > :is(h1,p,.badge),
+:root[data-background="rainy-city"][data-theme="dark"] #downloader > label {
+  text-shadow:0 1px 3px #000,0 0 12px #000b;
+}
+
+.rustdl-city-backdrop { display:none;pointer-events:none; }
+:root[data-background="rainy-city"][data-city-parallax="on"] {
+  background-image:none !important;
+}
+:root[data-background="rainy-city"][data-city-parallax="on"] .rustdl-city-backdrop {
+  display:block;position:fixed;inset:0;z-index:-1;overflow:hidden;
+}
+:root[data-background="rainy-city"][data-city-parallax="on"] .rustdl-city-image {
+  position:absolute;inset:-8vh 0;
+  background-image:var(--rustdl-page-background-image);
+  background-size:cover;background-position:center;background-repeat:no-repeat;
+  will-change:transform;
+}
+@media(prefers-reduced-motion:reduce) {
+  :root[data-background="rainy-city"][data-city-parallax="on"] { background-image:var(--rustdl-page-background-image) !important; }
+  .rustdl-city-backdrop { display:none !important; }
+}
+
+:root {
+  --rustdl-sunrise-1: url("__RUSTDL_SUNRISE_1__");
+  --rustdl-sunrise-2: url("__RUSTDL_SUNRISE_2__");
+  --rustdl-sunrise-3: url("__RUSTDL_SUNRISE_3__");
+  --rustdl-sunrise-4: url("__RUSTDL_SUNRISE_4__");
+  --rustdl-sunrise-5: url("__RUSTDL_SUNRISE_5__");
+  --rustdl-sunrise-6: url("__RUSTDL_SUNRISE_6__");
+  --rustdl-sunrise-7: url("__RUSTDL_SUNRISE_7__");
+  --rustdl-sunrise-8: url("__RUSTDL_SUNRISE_8__");
+  --rustdl-sunrise-9: url("__RUSTDL_SUNRISE_9__");
+  --rustdl-sunrise-10: url("__RUSTDL_SUNRISE_10__");
+  --rustdl-sunrise-11: url("__RUSTDL_SUNRISE_11__");
+  --rustdl-sunrise-12: url("__RUSTDL_SUNRISE_12__");
+}
+.rustdl-sunrise, .rustdl-sunrise > div { position:absolute;inset:0;pointer-events:none;background-size:cover;background-position:center;background-repeat:no-repeat; }
+
+:root[data-reduce-motion="on"],
+:root[data-reduce-motion="on"] *,
+:root[data-reduce-motion="on"] *::before,
+:root[data-reduce-motion="on"] *::after {
+  scroll-behavior:auto !important;
+  animation-duration:.01ms !important;
+  animation-iteration-count:1 !important;
+  transition-duration:.01ms !important;
+  transition-delay:0s !important;
+}
+:root[data-reduce-motion="on"] body::after { animation:none !important;transform:none !important; }
+:root[data-reduce-motion="on"]::view-transition-group(*),
+:root[data-reduce-motion="on"]::view-transition-old(*),
+:root[data-reduce-motion="on"]::view-transition-new(*) { animation:none !important; }

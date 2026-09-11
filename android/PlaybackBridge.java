@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 
 final class PlaybackBridge {
     private static final Pattern VIDEO_NAME = Pattern.compile(
-            "(?:[0-9]+-[1-9][0-9]*|youtube-[A-Za-z0-9_-]{11}|snapchat-[A-Za-z0-9_-]{20,160})\\.(?:mp4|m4a)");
+            "(?:[0-9]+-[1-9][0-9]*|youtube-[A-Za-z0-9_-]{11}|snapchat-[A-Za-z0-9_-]{20,160}|anime-[a-f0-9]{24})\\.(?:mp4|m4a)");
     private static final String POSITION_PREFIX = "position:";
     private static final String DURATION_PREFIX = "duration:";
     private static final String UPDATED_PREFIX = "updated:";

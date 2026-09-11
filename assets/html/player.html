@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>RustDL player</title>
+<link rel="stylesheet" href="{player_css}"></head><body><main class="player-shell">
+<div class="topline"><a class="brand" href="/"><span class="brand-mark">↓</span><span>RustDL</span></a><span class="context-pill"><i></i>{status}</span></div>
+<header><span class="eyebrow">RustDL player</span><h1>Ready when you are.</h1><p class="copy">{detail}</p></header>
+<section class="player-frame" style="view-transition-name:{transition_name}"><div class="player-toolbar"><span>{toolbar}</span><div class="player-actions"><button class="player-control" type="button" data-player-speed>1×</button><button class="player-control" type="button" data-player-rotation aria-pressed="false">Lock rotation</button><button class="player-control" type="button" data-player-pip>PiP</button><span class="codec">{codec}</span></div></div>{media_element}<span class="seek-toast" aria-live="polite"></span></section>
+<div class="meta-card"><div class="file-block"><span class="meta-label">{saved_kind}</span><code>{display_filename}</code></div><a class="action" href="/"><span>←</span>Back to library</a></div>
+</main>{playback_script}{view_transition_script}{dev_reload}</body></html>

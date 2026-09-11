@@ -1,0 +1,33 @@
+//! Local computation, UI, files, and application state. No provider requests.
+
+pub(crate) mod activity;
+pub(crate) mod activity_state;
+pub(crate) mod aniwaves;
+pub(crate) mod app_state;
+pub(crate) mod cli;
+pub(crate) mod dev;
+pub(crate) mod discovery;
+pub(crate) mod files;
+pub(crate) mod format;
+pub(crate) mod formats;
+pub(crate) mod gallery;
+pub(crate) mod html;
+pub(crate) mod inspection;
+pub(crate) mod live_events;
+pub(crate) mod media;
+pub(crate) mod models;
+pub(crate) mod pages;
+pub(crate) mod peers;
+pub(crate) mod playlist_resolution;
+pub(crate) mod queue;
+pub(crate) mod runtime;
+pub(crate) mod security;
+pub(crate) mod settings;
+pub(crate) mod snapchat;
+pub(crate) mod sources;
+pub(crate) mod storage;
+pub(crate) mod streaming_library;
+pub(crate) mod thumbnails;
+pub(crate) mod web_assets;
+pub(crate) mod x;
+pub(crate) mod youtube;

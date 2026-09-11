@@ -1,8 +1,9 @@
-use super::*;
+use super::local;
+use super::local::web_assets::INDEX_HTML;
 
 #[test]
 fn activity_center_is_live_filterable_and_actionable() {
-    let html = activity::render("");
+    let html = local::activity::render("");
     assert!(html.contains("RustDL Activity Center"));
     assert!(html.contains("data-filter=\"active\""));
     assert!(html.contains("data-filter=\"issue\""));
@@ -15,7 +16,7 @@ fn activity_center_is_live_filterable_and_actionable() {
 
 #[test]
 fn activity_snapshot_omits_sensitive_transfer_fields() {
-    let source = include_str!("activity_state.rs");
+    let source = include_str!("local/activity_state.rs");
     let transfer_json = source
         .split("\"transfers\":")
         .nth(1)
@@ -44,8 +45,8 @@ fn native_updater_and_rust_events_feed_activity_center() {
 
 #[test]
 fn activity_center_stays_out_of_inspection_mode() {
-    let source = include_str!("main.rs");
-    assert!(source.contains("\"/activity\" if !inspection_mode()"));
-    assert!(source.contains("\"/__app/activity.json\" if !inspection_mode()"));
-    assert!(source.contains("id=\"activity-link\""));
+    let source = include_str!("workflows/server.rs");
+    assert!(source.contains("\"/activity\" if !local::runtime::inspection_mode()"));
+    assert!(source.contains("\"/__app/activity.json\" if !local::runtime::inspection_mode()"));
+    assert!(INDEX_HTML.contains("id=\"activity-link\""));
 }

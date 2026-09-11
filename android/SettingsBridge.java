@@ -18,7 +18,11 @@ final class SettingsBridge {
     private static final String KEEP_SCREEN_AWAKE = "keep-screen-awake";
     private static final String DIAGNOSTICS_REFRESH_SECONDS = "diagnostics-refresh-seconds";
     private static final String APPEARANCE = "appearance";
+    private static final String ALLOW_SCREENSHOTS = "allow-screenshots";
+    private static final String BACKGROUND_THEME = "background-theme";
+    private static final String REDUCE_MOTION = "reduce-motion";
     private static final String SPACE_EFFECT = "space-effect";
+    private static final String MOBILE_DOWNLOAD_POLICY = "mobile-download-policy";
 
     private final MainActivity activity;
     private final SharedPreferences preferences;
@@ -35,7 +39,10 @@ final class SettingsBridge {
 
     @JavascriptInterface
     public String save(String requestedFolder, boolean keepAwake, int refreshSeconds,
-            String requestedAppearance, boolean spaceEffect) {
+            String requestedAppearance, boolean spaceEffect, String requestedBackground, boolean allowScreenshots, boolean reduceMotion, String mobilePolicy) {
+        if (!"allow".equals(mobilePolicy) && !"ask".equals(mobilePolicy) && !"block".equals(mobilePolicy)) {
+            return response(false, "Choose a supported mobile-data download policy");
+        }
         String folder = normalizeFolder(requestedFolder);
         if (folder == null) {
             return response(false,
@@ -48,15 +55,25 @@ final class SettingsBridge {
         if (appearance == null) {
             return response(false, "Choose system, light, or dark appearance");
         }
+        if (!"space".equals(requestedBackground) && !"rainy-city".equals(requestedBackground)) {
+            return response(false, "Choose a supported background theme");
+        }
         boolean saved = preferences.edit()
                 .putString(DOWNLOAD_FOLDER, folder)
                 .putBoolean(KEEP_SCREEN_AWAKE, keepAwake)
                 .putInt(DIAGNOSTICS_REFRESH_SECONDS, refreshSeconds)
                 .putString(APPEARANCE, appearance)
+                .putString(BACKGROUND_THEME, requestedBackground)
                 .putBoolean(SPACE_EFFECT, spaceEffect)
+                .putBoolean(ALLOW_SCREENSHOTS, allowScreenshots)
+                .putBoolean(REDUCE_MOTION, reduceMotion)
+                .putString(MOBILE_DOWNLOAD_POLICY, mobilePolicy)
                 .commit();
         if (saved) {
             activity.applyPlaybackScreenPreference();
+            activity.applyScreenshotPreference();
+            activity.getContentResolver().notifyChange(
+                    android.net.Uri.parse("content://" + activity.getPackageName() + ".preferences"), null);
             activity.applyAppearance(appearance);
         }
         return response(saved, saved ? "Settings saved" : "Android could not save settings");
@@ -69,12 +86,20 @@ final class SettingsBridge {
                 .remove(KEEP_SCREEN_AWAKE)
                 .remove(DIAGNOSTICS_REFRESH_SECONDS)
                 .remove(APPEARANCE)
+                .remove(BACKGROUND_THEME)
                 .remove(SPACE_EFFECT)
+                .remove(ALLOW_SCREENSHOTS)
+                .remove(REDUCE_MOTION)
+                .remove(MOBILE_DOWNLOAD_POLICY)
                 .commit();
         if (saved) {
             activity.applyPlaybackScreenPreference();
+            activity.applyScreenshotPreference();
+            activity.getContentResolver().notifyChange(
+                    android.net.Uri.parse("content://" + activity.getPackageName() + ".preferences"), null);
             activity.applyAppearance("system");
         }
+        if (saved) DownloadNetworkPolicy.get(activity).resetApproval();
         return response(saved, saved ? "Defaults restored" : "Android could not reset settings");
     }
 
@@ -101,8 +126,41 @@ final class SettingsBridge {
     }
 
     @JavascriptInterface
+    public String backgroundTheme() {
+        return "rainy-city".equals(preferences.getString(BACKGROUND_THEME, "space")) ? "rainy-city" : "space";
+    }
+
+    @JavascriptInterface
     public boolean spaceEffectEnabled() {
         return preferences.getBoolean(SPACE_EFFECT, true);
+    }
+
+    @JavascriptInterface
+    public boolean reduceMotionEnabled() {
+        return preferences.getBoolean(REDUCE_MOTION, false);
+    }
+
+    @JavascriptInterface
+    public String mobileDownloadPolicy() {
+        String value = preferences.getString(MOBILE_DOWNLOAD_POLICY, "ask");
+        return "allow".equals(value) || "block".equals(value) ? value : "ask";
+    }
+
+    @JavascriptInterface
+    public boolean setMobileDownloadPolicy(String value) {
+        if (!"allow".equals(value) && !"ask".equals(value) && !"block".equals(value)) return false;
+        return preferences.edit().putString(MOBILE_DOWNLOAD_POLICY, value).commit();
+    }
+
+    @JavascriptInterface
+    public int downloadNetworkState() { return DownloadNetworkPolicy.get(activity).state(); }
+
+    @JavascriptInterface
+    public void requestMobileDownloadApproval() { DownloadNetworkPolicy.get(activity).requestApproval(activity); }
+
+    static boolean screenshotsAllowed(Context context) {
+        return context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+                .getBoolean(ALLOW_SCREENSHOTS, false);
     }
 
     boolean keepScreenAwake() {
@@ -127,9 +185,13 @@ final class SettingsBridge {
             result.put("downloadFolder", downloadFolder());
             result.put("downloadPath", "Downloads/" + downloadFolder());
             result.put("keepScreenAwake", keepScreenAwake());
+            result.put("allowScreenshots", screenshotsAllowed(activity));
             result.put("diagnosticsRefreshSeconds", diagnosticsRefreshSeconds());
             result.put("appearance", appearance());
+            result.put("backgroundTheme", backgroundTheme());
             result.put("spaceEffectEnabled", spaceEffectEnabled());
+            result.put("reduceMotion", reduceMotionEnabled());
+            result.put("mobileDownloadPolicy", mobileDownloadPolicy());
             return result.toString();
         } catch (JSONException impossible) {
             return "{\"ok\":false,\"detail\":\"Could not encode settings\"}";

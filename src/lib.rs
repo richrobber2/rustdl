@@ -19,6 +19,15 @@ static ANDROID_BRIDGE: OnceLock<AndroidBridge> = OnceLock::new();
 static SERVER_STARTED: Once = Once::new();
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_DownloadNetworkPolicy_nativeSetDownloadNetworkState(
+    _env: JNIEnv,
+    _class: JObject,
+    state: jint,
+) {
+    app::local::runtime::set_download_network_state(state as u8);
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_app_rustdl_MainActivity_nativeSetRuntimeTuning(
     _env: JNIEnv,
     _activity: JObject,
@@ -29,7 +38,7 @@ pub extern "system" fn Java_app_rustdl_MainActivity_nativeSetRuntimeTuning(
     free_bytes: jlong,
     processors: jint,
 ) {
-    app::set_runtime_tuning(
+    app::local::runtime::set_runtime_tuning(
         unmetered != 0,
         charging != 0,
         power_save != 0,
@@ -55,7 +64,7 @@ pub extern "system" fn Java_app_rustdl_MainActivity_nativeSetPeerPairing<'local>
             .get_string(&key)
             .map_err(|error| error.to_string())?
             .into();
-        app::set_outbound_peer_pairing(&address, &key)
+        app::local::peers::set_outbound_peer_pairing(&address, &key)
     })();
     if result.is_ok() { 1 } else { 0 }
 }
@@ -95,22 +104,22 @@ pub extern "system" fn Java_app_rustdl_MainActivity_nativeStartServer<'local>(
                 .map_err(|error| error.to_string())?,
         };
         let _ = ANDROID_BRIDGE.set(bridge);
-        app::set_publish_hook(publish_to_android_downloads);
-        app::set_transfer_hook(update_android_transfer);
+        app::local::runtime::set_publish_hook(publish_to_android_downloads);
+        app::local::runtime::set_transfer_hook(update_android_transfer);
         if inspection_mode == 0 {
-            app::set_event_hook(dispatch_android_event);
+            app::local::runtime::set_event_hook(dispatch_android_event);
         }
-        app::set_mux_hook(mux_android_tracks);
-        app::set_extract_audio_hook(extract_android_audio);
-        app::set_thumbnail_hook(generate_android_thumbnail);
+        app::local::runtime::set_mux_hook(mux_android_tracks);
+        app::local::runtime::set_extract_audio_hook(extract_android_audio);
+        app::local::runtime::set_thumbnail_hook(generate_android_thumbnail);
         if inspection_mode == 0 {
-            app::set_watched_hook(watched_from_android);
-            app::set_delete_hook(delete_from_android_downloads);
+            app::local::runtime::set_watched_hook(watched_from_android);
+            app::local::runtime::set_delete_hook(delete_from_android_downloads);
         }
-        app::set_inspection_mode(inspection_mode != 0);
+        app::local::runtime::set_inspection_mode(inspection_mode != 0);
         SERVER_STARTED.call_once(move || {
             std::thread::spawn(move || {
-                app::run_embedded_server(bind, PathBuf::from(output_dir));
+                app::workflows::server::run_embedded_server(bind, PathBuf::from(output_dir));
             });
         });
         Ok(())
@@ -233,7 +242,7 @@ fn extract_android_audio(source: &Path, output: &Path) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
-fn update_android_transfer(summary: app::TransferSummary) -> Result<(), String> {
+fn update_android_transfer(summary: app::local::runtime::TransferSummary) -> Result<(), String> {
     let bridge = ANDROID_BRIDGE
         .get()
         .ok_or_else(|| "Android bridge is not initialized".to_owned())?;

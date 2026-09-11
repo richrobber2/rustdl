@@ -1,8 +1,9 @@
-use super::{INDEX_HTML, settings};
+use super::local;
+use super::local::web_assets::INDEX_HTML;
 
 #[test]
 fn settings_are_persistent_apk_local_and_scoped() {
-    let html = settings::render("");
+    let html = local::settings::render("");
     let bridge = include_str!("../android/SettingsBridge.java");
     let activity = include_str!("../android/MainActivity.java");
     assert!(INDEX_HTML.contains(r#"href="/settings""#));

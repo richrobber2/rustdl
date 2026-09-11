@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
 
 final class ThumbnailManager {
     private static final Pattern VIDEO_NAME = Pattern.compile(
-            "(?:[0-9]+-[1-9][0-9]*|youtube-[A-Za-z0-9_-]{11}|snapchat-[A-Za-z0-9_-]{20,160})\\.mp4");
+            "(?:[0-9]+-[1-9][0-9]*|youtube-[A-Za-z0-9_-]{11}|snapchat-[A-Za-z0-9_-]{20,160}|anime-[a-f0-9]{24})\\.mp4");
     private static final int MAX_WIDTH = 480;
     private static final Semaphore GENERATION_SLOTS = new Semaphore(2);
 
