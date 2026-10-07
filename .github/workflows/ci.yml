@@ -41,6 +41,8 @@ jobs:
           mkdir -p android/platform
           curl -L --fail --retry 3 -o android/platform/android.jar "$url"
           echo "4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b  android/platform/android.jar" | sha256sum --check
+      - name: Fetch pinned native UI crates for offline fixtures
+        run: cargo fetch --locked --manifest-path native-ui/Cargo.toml
       - name: Test fixed native navigation destinations
         run: python3 tests/integration/test_native_home.py
       - name: Test network policy in isolation

@@ -8,7 +8,7 @@ pub(in super::super::super) const CHANGELOG: &[(&str, &[&str])] = &[
     (
         "0.1.45",
         &[
-            "Restored the CI Rust test run by moving the synthetic Taffy scroll-layout fixture out of Cargo's auto-discovered integration tests, and fetched the pinned, SHA-256-verified Android API 35 platform jar in CI so native navigation and poster-policy checks compile.",
+            "Restored the CI Rust test run by moving the synthetic Taffy scroll-layout fixture out of Cargo's auto-discovered integration tests, fetched the pinned, SHA-256-verified Android API 35 platform jar in CI so native navigation and poster-policy checks compile, and pre-fetched the locked native UI crates so the offline accessibility and scroll-layout fixtures resolve on clean runners.",
             "Gave every native GPUI screen the same top header with Back and title; Storage, Activity Center, Updates, Discover downloads, Anime and Device transfers no longer place Back at the bottom of the page and now draw the shared translucent page surface over the background.",
             "Restyled native Queue, Library, Storage, Activity and Discovery items as bordered cards with muted secondary text, compact wrapping action rows (Open player, Play and Resume emphasized, Delete marked as destructive) and Previous/Next/Refresh grouped on one row instead of stacked full-width buttons.",
             "Showed native empty and loading states inside cards, grouped Storage usage and cleanup actions, Activity status and Diagnostics metrics into cards, colored every native action and load error with the theme's danger color, and laid out Home and Library tool links in a two-column grid.",
