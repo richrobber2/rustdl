@@ -43,79 +43,66 @@ impl Home {
     }
     pub(super) fn render_updates(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let privacy = self.settings.as_ref().is_none_or(|s| s.inspection_privacy);
-        let mut content = semantic_scroll("native-updates", &self.scrolls[11])
-            .flex()
-            .flex_col()
-            .gap_4()
-            .p_4()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .font_semibold()
-                    .child(semantic_text("updates-text-1", "Updates")),
-            );
+        let mut content = ui::body("native-updates", &self.scrolls[Screen::Updates as usize]);
         if let Some(page) = &self.updates {
-            content = content.child(div().child(semantic_text(
+            let mut status = ui::card(cx).child(ui::card_title(
                 "updates-text-2",
                 if privacy {
                     format!("Updates · {}", page.state)
                 } else {
                     page.detail.clone()
                 },
-            )));
+            ));
             if !privacy && !page.version.is_empty() {
-                content = content.child(div().child(semantic_text(
+                status = status.child(div().child(semantic_text(
                     "updates-text-3",
                     format!("Available version · {}", page.version),
                 )));
             }
             if !page.configured {
-                content = content.child(div().child(semantic_text(
+                status = status.child(ui::muted_text(
                     "updates-text-4",
                     "No update source configured.",
-                )));
+                    cx,
+                ));
+            }
+            if page.can_install {
+                status = status.child(
+                    self.update_button("update-install", "Install ready update", "install", cx)
+                        .primary(),
+                );
             }
             if page.can_check {
-                content = content.child(self.update_button(
+                status = status.child(self.update_button(
                     "update-check",
                     "Check for updates",
                     "check",
                     cx,
                 ));
             }
-            if page.can_install {
-                content = content.child(self.update_button(
-                    "update-install",
-                    "Install ready update",
-                    "install",
-                    cx,
-                ));
-            }
+            content = content.child(status);
         } else {
-            content = content
-                .child(div().child(semantic_text("updates-text-5", "Loading update status…")));
+            content = content.child(ui::card(cx).child(ui::muted_text(
+                "updates-text-5",
+                "Loading update status…",
+                cx,
+            )));
         }
         content =
             content.child(self.update_button("update-refresh", "Refresh status", "snapshot", cx));
         if self.navigation_error {
-            content = content.child(div().child(semantic_text(
+            content = content.child(ui::error_text(
                 "updates-text-6",
                 "Action unavailable. Try again.",
-            )));
+                cx,
+            ));
         }
-        content.child(
-            Button::new("updates-back")
-                .label("Back")
-                .large()
-                .w_full()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    set_screen(0, Ordering::Release);
-                    this.screen = 0;
-                    let _ = notify_screen("home");
-                    cx.notify();
-                })),
-        )
+        ui::page(cx)
+            .child(ui::header(
+                self.back_button("updates-back", cx),
+                "updates-text-1",
+                "Updates",
+            ))
+            .child(content)
     }
 }

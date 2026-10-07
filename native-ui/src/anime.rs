@@ -86,29 +86,13 @@ impl Home {
     }
     pub(super) fn render_anime(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let privacy = self.settings.as_ref().is_none_or(|s| s.inspection_privacy);
-        let mut content = semantic_scroll("native-anime", &self.scrolls[8])
-            .size_full()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .p_4()
-            .min_h_0()
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .text_2xl()
-                    .font_semibold()
-                    .child(semantic_text("anime-text-1", "Anime")),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(semantic_text(
-                        "anime-subtitle",
-                        "Discover shows and keep your favorites close.",
-                    )),
-            )
+        let mut content = ui::body("native-anime", &self.scrolls[Screen::Anime as usize])
+            .pt_0()
+            .child(ui::muted_text(
+                "anime-subtitle",
+                "Discover shows and keep your favorites close.",
+                cx,
+            ))
             .child(self.anime_button(
                 "anime-search".into(),
                 "Search and categories".into(),
@@ -411,22 +395,18 @@ impl Home {
             cx,
         ));
         if self.navigation_error {
-            content = content.child(div().child(semantic_text(
+            content = content.child(ui::error_text(
                 "anime-text-17",
                 "Action unavailable. Try again.",
-            )));
+                cx,
+            ));
         }
-        content.child(
-            Button::new("anime-back")
-                .label("Back")
-                .large()
-                .w_full()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    set_screen(0, Ordering::Release);
-                    this.screen = 0;
-                    let _ = notify_screen("home");
-                    cx.notify();
-                })),
-        )
+        ui::page(cx)
+            .child(ui::header(
+                self.back_button("anime-back", cx),
+                "anime-text-1",
+                "Anime",
+            ))
+            .child(content)
     }
 }

@@ -174,14 +174,17 @@ impl Home {
         let audio_only = self.player.as_ref().is_some_and(|p| p.audio_only);
         let fullscreen = self.player.as_ref().is_some_and(|p| p.fullscreen);
         let privacy = self.settings.as_ref().is_none_or(|s| s.inspection_privacy);
-        let mut controls = semantic_scroll("native-player-controls", &self.scrolls[12])
-            .flex()
-            .flex_col()
-            .gap_3()
-            .p_4()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll();
+        let mut controls = semantic_scroll(
+            "native-player-controls",
+            &self.scrolls[Screen::Player as usize],
+        )
+        .flex()
+        .flex_col()
+        .gap_3()
+        .p_4()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
         let title = if privacy {
             "Downloaded media".to_owned()
         } else {
@@ -503,8 +506,8 @@ impl Home {
                     .w_full()
                     .on_click(cx.listener(|this, _, _, cx| {
                         let _ = request("pause", 0.);
-                        set_screen(5, Ordering::Release);
-                        this.screen = 5;
+                        set_screen(Screen::Library, Ordering::Release);
+                        this.screen = Screen::Library;
                         let _ = notify_screen("library");
                         let _ = request_library(0, "");
                         cx.notify();

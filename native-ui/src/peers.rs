@@ -37,19 +37,7 @@ fn request(action: &str) -> Result<(), String> {
 impl Home {
     pub(super) fn render_peers(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let privacy = self.settings.as_ref().is_none_or(|s| s.inspection_privacy);
-        let mut content = semantic_scroll("native-peers", &self.scrolls[7])
-            .flex()
-            .flex_col()
-            .gap_4()
-            .p_4()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .font_semibold()
-                    .child(semantic_text("peers-text-1", "Device transfers")),
-            );
+        let mut content = ui::body("native-peers", &self.scrolls[Screen::Peers as usize]);
         if let Some(page) = &self.peers {
             if page.receive_enabled {
                 content = content.child(div().child(semantic_text(
@@ -216,23 +204,21 @@ impl Home {
                 })),
         );
         if self.navigation_error {
-            content = content.child(div().child(semantic_text(
+            content = content.child(ui::error_text(
                 "peers-text-14",
                 "Action unavailable. Try again.",
-            )));
+                cx,
+            ));
         }
-        content.child(
-            Button::new("peer-back")
-                .label("Back to library")
-                .large()
-                .w_full()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    set_screen(5, Ordering::Release);
-                    this.screen = 5;
-                    let _ = notify_screen("library");
-                    let _ = request_library(0, "");
-                    cx.notify();
-                })),
-        )
+        let back = Button::new("peer-back")
+            .label("Back")
+            .large()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.navigate(Screen::Library, "library", cx);
+                let _ = request_library(0, "");
+            }));
+        ui::page(cx)
+            .child(ui::header(back, "peers-text-1", "Device transfers"))
+            .child(content)
     }
 }

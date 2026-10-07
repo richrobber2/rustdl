@@ -75,7 +75,6 @@ impl Home {
         Button::new(key)
             .label(label)
             .large()
-            .w_full()
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.navigation_error =
                     request(FILTERS[this.activity_filter as usize % 4], offset).is_err();
@@ -84,19 +83,7 @@ impl Home {
     }
     pub(super) fn render_activity(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let privacy = self.settings.as_ref().is_none_or(|s| s.inspection_privacy);
-        let mut content = semantic_scroll("native-activity", &self.scrolls[10])
-            .flex()
-            .flex_col()
-            .gap_4()
-            .p_4()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .font_semibold()
-                    .child(semantic_text("activity-text-1", "Activity Center")),
-            )
+        let mut content = ui::body("native-activity", &self.scrolls[Screen::Activity as usize])
             .child(
                 Button::new("activity-filter")
                     .label(format!(
@@ -113,21 +100,26 @@ impl Home {
                     })),
             );
         let mut offset = 0;
+        let mut pages = ui::button_row();
         if let Some(page) = &self.activity {
             offset = page.offset as i32;
             if !page.detail.is_empty() {
-                content = content
-                    .child(div().child(semantic_text("activity-text-2", page.detail.clone())));
+                content = content.child(if page.ok {
+                    ui::muted_text("activity-text-2", page.detail.clone(), cx)
+                } else {
+                    ui::error_text("activity-text-2", page.detail.clone(), cx)
+                });
             }
             if page.ok {
-                content = content
-                    .child(div().child(semantic_text(
+                let mut status = ui::card(cx)
+                    .gap_2()
+                    .child(ui::card_title(
                         "activity-text-3",
                         format!(
                             "{} active · {} issues · {} completed",
                             page.active, page.issues, page.completed
                         ),
-                    )))
+                    ))
                     .child(div().child(semantic_text(
                         "activity-text-4",
                         format!(
@@ -171,29 +163,27 @@ impl Home {
                         },
                     )));
                 if page.storage_low {
-                    content = content
-                        .child(div().child(semantic_text("activity-text-8", "Storage is low")));
+                    status = status.child(ui::error_text("activity-text-8", "Storage is low", cx));
                 }
                 if !page.update_detail.is_empty() {
-                    content = content.child(
-                        div().child(semantic_text("activity-text-9", page.update_detail.clone())),
-                    );
+                    status = status.child(ui::muted_text(
+                        "activity-text-9",
+                        page.update_detail.clone(),
+                        cx,
+                    ));
                 }
+                content = content.child(status);
                 if page.items.is_empty() {
-                    content = content.child(div().child(semantic_text(
+                    content = content.child(ui::card(cx).child(ui::muted_text(
                         "activity-text-10",
                         "No activity matches this filter.",
+                        cx,
                     )));
                 }
                 for item in &page.items {
-                    let mut card = div()
+                    let mut card = ui::card(cx)
                         .id(format!("activity-row-{}", item.id))
-                        .flex()
-                        .flex_col()
                         .gap_2()
-                        .p_3()
-                        .border_1()
-                        .rounded_md()
                         .child(div().font_semibold().child(semantic_text(
                             "activity-text-11",
                             if privacy {
@@ -202,16 +192,17 @@ impl Home {
                                 item.title.clone()
                             },
                         )))
-                        .child(div().child(semantic_text(
+                        .child(ui::muted_text(
                             "activity-text-12",
                             format!(
                                 "{} · {}",
                                 item.phase_label,
                                 progress::transfer_progress(item.done, item.total)
                             ),
-                        )));
+                            cx,
+                        ));
                     if item.issue {
-                        card = card.child(div().child(semantic_text(
+                        card = card.child(ui::error_text(
                             "activity-text-13",
                             if privacy {
                                 "Action needs attention".to_owned()
@@ -220,7 +211,8 @@ impl Home {
                                     .clone()
                                     .unwrap_or_else(|| "Action needs attention".into())
                             },
-                        )));
+                            cx,
+                        ));
                     }
                     let action = if item.kind == "transfer" {
                         "transfer"
@@ -238,19 +230,20 @@ impl Home {
                     };
                     let id = item.id.clone();
                     card = card.child(
-                        Button::new(format!("activity-item-{id}"))
-                            .label(label)
-                            .large()
-                            .w_full()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.navigation_error = open(&id, action).is_err();
-                                cx.notify();
-                            })),
+                        ui::button_row().child(
+                            Button::new(format!("activity-item-{id}"))
+                                .label(label)
+                                .large()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.navigation_error = open(&id, action).is_err();
+                                    cx.notify();
+                                })),
+                        ),
                     );
                     content = content.child(card);
                 }
                 if page.offset > 0 {
-                    content = content.child(self.activity_page_button(
+                    pages = pages.child(self.activity_page_button(
                         "activity-prev",
                         "Previous",
                         offset.saturating_sub(25),
@@ -258,7 +251,7 @@ impl Home {
                     ));
                 }
                 if page.offset + page.items.len() < page.total_items {
-                    content = content.child(self.activity_page_button(
+                    pages = pages.child(self.activity_page_button(
                         "activity-next",
                         "Next",
                         offset.saturating_add(25),
@@ -267,28 +260,31 @@ impl Home {
                 }
             }
         } else {
-            content =
-                content.child(div().child(semantic_text("activity-text-14", "Loading activity…")));
-        }
-        content =
-            content.child(self.activity_page_button("activity-refresh", "Refresh", offset, cx));
-        if self.navigation_error {
-            content = content.child(div().child(semantic_text(
-                "activity-text-15",
-                "Action unavailable. Try again.",
+            content = content.child(ui::card(cx).child(ui::muted_text(
+                "activity-text-14",
+                "Loading activity…",
+                cx,
             )));
         }
-        content.child(
-            Button::new("activity-back")
-                .label("Back")
-                .large()
-                .w_full()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    set_screen(0, Ordering::Release);
-                    this.screen = 0;
-                    let _ = notify_screen("home");
-                    cx.notify();
-                })),
-        )
+        content = content.child(pages.child(self.activity_page_button(
+            "activity-refresh",
+            "Refresh",
+            offset,
+            cx,
+        )));
+        if self.navigation_error {
+            content = content.child(ui::error_text(
+                "activity-text-15",
+                "Action unavailable. Try again.",
+                cx,
+            ));
+        }
+        ui::page(cx)
+            .child(ui::header(
+                self.back_button("activity-back", cx),
+                "activity-text-1",
+                "Activity Center",
+            ))
+            .child(content)
     }
 }

@@ -232,8 +232,8 @@ impl Page {
                     .large()
                     .w_full()
                     .on_click(cx.listener(|this, _, _, cx| {
-                        set_screen(8, Ordering::Release);
-                        this.screen = 8;
+                        set_screen(Screen::Anime, Ordering::Release);
+                        this.screen = Screen::Anime;
                         let _ = notify_screen("anime");
                         this.navigation_error = anime::request("catalog", "{}", 0).is_err();
                         cx.notify();

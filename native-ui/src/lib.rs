@@ -18,6 +18,7 @@ mod settings;
 mod storage;
 mod streaming;
 mod streaming_decoder;
+mod ui;
 mod updates;
 mod release_notes {
     include!(concat!(env!("OUT_DIR"), "/release_notes.rs"));
@@ -59,6 +60,70 @@ impl From<jni::errors::Error> for NativeInitError {
 // RustDL uses host::start with a plain Activity and never invokes this path.
 #[unsafe(no_mangle)]
 fn android_main(_app: android_activity::AndroidApp) {}
+
+/// Native destinations. Discriminants are shared with Java and accessibility
+/// context through `SCREEN`, so they must not change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+enum Screen {
+    #[default]
+    Home = 0,
+    History = 1,
+    Settings = 2,
+    Queue = 3,
+    Diagnostics = 4,
+    Library = 5,
+    Discovery = 6,
+    Peers = 7,
+    Anime = 8,
+    Storage = 9,
+    Activity = 10,
+    Updates = 11,
+    Player = 12,
+    Streaming = 13,
+    StreamingDecoder = 14,
+    MiniPlayer = 15,
+}
+
+impl Screen {
+    const ALL: [Screen; 16] = [
+        Screen::Home,
+        Screen::History,
+        Screen::Settings,
+        Screen::Queue,
+        Screen::Diagnostics,
+        Screen::Library,
+        Screen::Discovery,
+        Screen::Peers,
+        Screen::Anime,
+        Screen::Storage,
+        Screen::Activity,
+        Screen::Updates,
+        Screen::Player,
+        Screen::Streaming,
+        Screen::StreamingDecoder,
+        Screen::MiniPlayer,
+    ];
+
+    fn from_u8(value: u8) -> Self {
+        Self::ALL
+            .get(usize::from(value))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn current() -> Self {
+        Self::from_u8(SCREEN.load(Ordering::Acquire))
+    }
+
+    /// Scroll handle slot; the mini-player keeps the library's position.
+    fn scroll_index(self) -> usize {
+        match self {
+            Screen::MiniPlayer => Screen::Library as usize,
+            screen => screen as usize,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct HomeSnapshot {
@@ -148,7 +213,7 @@ fn change_theme(dark: bool, cx: &mut App) {
 struct Home {
     transfers: HomeSnapshot,
     navigation_error: bool,
-    screen: u8,
+    screen: Screen,
     settings: Option<settings::Settings>,
     queue: Option<queue::QueuePage>,
     diagnostics: Option<diagnostics::Diagnostics>,
@@ -236,7 +301,7 @@ impl Home {
                 SliderEvent::Change(_) => this.player_volume_dragging = true,
                 SliderEvent::Release(SliderValue::Single(value)) => {
                     this.player_volume_dragging = false;
-                    if this.screen == 12 {
+                    if this.screen == Screen::Player {
                         this.navigation_error =
                             player::request("volume", (*value as f64 / 100.).clamp(0., 1.))
                                 .is_err();
@@ -256,13 +321,13 @@ impl Home {
                 let next = snapshot();
                 if this
                     .update(cx, |this, cx| {
-                        let screen = SCREEN.load(Ordering::Acquire);
+                        let screen = Screen::current();
                         let delta = ANIME_SCROLL
                             .lock()
                             .unwrap_or_else(|p| p.into_inner())
-                            .take(screen);
+                            .take(screen as u8);
                         if delta != 0. {
-                            let handle = &this.scrolls[8];
+                            let handle = &this.scrolls[Screen::Anime as usize];
                             let previous = handle.offset();
                             let mut offset = previous;
                             offset.y = (offset.y + px(delta))
@@ -367,7 +432,7 @@ impl Home {
         Self {
             transfers,
             navigation_error: false,
-            screen: SCREEN.load(Ordering::Acquire),
+            screen: Screen::current(),
             library: LIBRARY.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             discovery: DISCOVERY.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             streaming_decoder: STREAMING_DECODER
@@ -407,6 +472,21 @@ impl Home {
         }
     }
 
+    /// Switches screens and tells the Android host which route is visible.
+    fn navigate(&mut self, screen: Screen, name: &'static str, cx: &mut Context<Self>) {
+        self.screen = screen;
+        set_screen(screen, Ordering::Release);
+        let _ = notify_screen(name);
+        cx.notify();
+    }
+
+    fn back_button(&self, id: &'static str, cx: &mut Context<Self>) -> Button {
+        Button::new(id)
+            .label("Back")
+            .large()
+            .on_click(cx.listener(|this, _, _, cx| this.navigate(Screen::Home, "home", cx)))
+    }
+
     fn destination(&self, id: &'static str, label: &'static str, cx: &mut Context<Self>) -> Button {
         Button::new(id)
             .label(label)
@@ -416,20 +496,20 @@ impl Home {
             .on_click(cx.listener(move |this, _, _, cx| {
                 let _ = notify_screen(id);
                 if id == "changelog" {
-                    this.screen = 1;
-                    set_screen(1, Ordering::Release);
+                    this.screen = Screen::History;
+                    set_screen(Screen::History, Ordering::Release);
                     this.navigation_error = false;
                 } else if id == "updates" {
                     this.settings = read_settings().ok();
                     *SETTINGS.lock().unwrap_or_else(|p| p.into_inner()) = this.settings.clone();
-                    set_screen(11, Ordering::Release);
-                    this.screen = 11;
+                    set_screen(Screen::Updates, Ordering::Release);
+                    this.screen = Screen::Updates;
                     this.navigation_error = updates::request("snapshot").is_err();
                 } else if id == "activity" {
                     this.settings = read_settings().ok();
                     *SETTINGS.lock().unwrap_or_else(|p| p.into_inner()) = this.settings.clone();
-                    set_screen(10, Ordering::Release);
-                    this.screen = 10;
+                    set_screen(Screen::Activity, Ordering::Release);
+                    this.screen = Screen::Activity;
                     this.navigation_error = activity::request(
                         ["all", "active", "issue", "complete"][this.activity_filter as usize % 4],
                         0,
@@ -438,20 +518,20 @@ impl Home {
                 } else if id == "storage" {
                     this.settings = read_settings().ok();
                     *SETTINGS.lock().unwrap_or_else(|p| p.into_inner()) = this.settings.clone();
-                    set_screen(9, Ordering::Release);
-                    this.screen = 9;
+                    set_screen(Screen::Storage, Ordering::Release);
+                    this.screen = Screen::Storage;
                     this.navigation_error = storage::request("snapshot", "", 0).is_err();
                 } else if id == "anime" {
                     this.settings = read_settings().ok();
                     *SETTINGS.lock().unwrap_or_else(|p| p.into_inner()) = this.settings.clone();
-                    set_screen(8, Ordering::Release);
-                    this.screen = 8;
+                    set_screen(Screen::Anime, Ordering::Release);
+                    this.screen = Screen::Anime;
                     this.navigation_error = anime::request("catalog", "{}", 0).is_err();
                 } else if id == "library" {
                     this.settings = read_settings().ok();
                     *SETTINGS.lock().unwrap_or_else(|p| p.into_inner()) = this.settings.clone();
-                    this.screen = 5;
-                    set_screen(5, Ordering::Release);
+                    this.screen = Screen::Library;
+                    set_screen(Screen::Library, Ordering::Release);
                     this.library = None;
                     *LIBRARY.lock().unwrap_or_else(|p| p.into_inner()) = None;
                     this.navigation_error = request_library(0, "").is_err();
@@ -461,8 +541,8 @@ impl Home {
                             *DIAGNOSTICS.lock().unwrap_or_else(|p| p.into_inner()) =
                                 Some(diagnostics.clone());
                             this.diagnostics = Some(diagnostics);
-                            this.screen = 4;
-                            set_screen(4, Ordering::Release);
+                            this.screen = Screen::Diagnostics;
+                            set_screen(Screen::Diagnostics, Ordering::Release);
                             this.navigation_error = false;
                         }
                         Err(_) => this.navigation_error = true,
@@ -475,8 +555,8 @@ impl Home {
                                 this.settings.clone();
                             *QUEUE.lock().unwrap_or_else(|p| p.into_inner()) = Some(queue.clone());
                             this.queue = Some(queue);
-                            this.screen = 3;
-                            set_screen(3, Ordering::Release);
+                            this.screen = Screen::Queue;
+                            set_screen(Screen::Queue, Ordering::Release);
                             this.navigation_error = false;
                         }
                         Err(_) => this.navigation_error = true,
@@ -487,8 +567,8 @@ impl Home {
                             *SETTINGS.lock().unwrap_or_else(|p| p.into_inner()) =
                                 Some(settings.clone());
                             this.settings = Some(settings);
-                            this.screen = 2;
-                            set_screen(2, Ordering::Release);
+                            this.screen = Screen::Settings;
+                            set_screen(Screen::Settings, Ordering::Release);
                             this.navigation_error = false;
                         }
                         Err(_) => this.navigation_error = true,
@@ -562,15 +642,7 @@ impl Home {
                             .into_any_element(),
                         history::Row::Note(note) => item
                             .pb_4()
-                            .child(
-                                div()
-                                    .p_4()
-                                    .rounded_lg()
-                                    .border_1()
-                                    .border_color(cx.theme().border)
-                                    .bg(cx.theme().muted.opacity(0.45))
-                                    .child(semantic_text("release-note", *note)),
-                            )
+                            .child(ui::card(cx).child(semantic_text("release-note", *note)))
                             .into_any_element(),
                         history::Row::MoreNotes { version, remaining } => {
                             let version = *version;
@@ -616,35 +688,12 @@ impl Home {
                 })
                 .size_full(),
             );
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(cx.theme().background.opacity(0.88))
-            .text_color(cx.theme().foreground)
-            .child(
-                div()
-                    .p_4()
-                    .flex()
-                    .gap_4()
-                    .child(
-                        Button::new("history-back")
-                            .label("Back")
-                            .large()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.screen = 0;
-                                set_screen(0, Ordering::Release);
-                                let _ = notify_screen("home");
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_2xl()
-                            .font_semibold()
-                            .child(semantic_text("lib-remaining-text-1", "What's new")),
-                    ),
-            )
+        ui::page(cx)
+            .child(ui::header(
+                self.back_button("history-back", cx),
+                "lib-remaining-text-1",
+                "What's new",
+            ))
             .child(content)
     }
 }
@@ -668,47 +717,22 @@ impl Home {
     }
 
     fn settings_group(title: &'static str, cx: &Context<Self>) -> gpui::Div {
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .p_4()
-            .rounded_lg()
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().muted.opacity(0.45))
-            .child(
-                div()
-                    .text_lg()
-                    .font_semibold()
-                    .child(semantic_text(title, title)),
-            )
+        ui::card(cx).child(ui::card_title(title, title))
     }
 
     fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut content = semantic_scroll("native-settings", &self.scrolls[2])
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p_4()
-            .gap_4();
+        let mut content = ui::body("native-settings", &self.scrolls[Screen::Settings as usize]);
         if let Some(settings) = &self.settings {
             let folder = if settings.inspection_privacy {
                 "Hidden during inspection"
             } else {
                 &settings.download_folder
             };
-            content = content.child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(semantic_text(
-                        "settings-autosave",
-                        "Changes save immediately.",
-                    )),
-            );
+            content = content.child(ui::muted_text(
+                "settings-autosave",
+                "Changes save immediately.",
+                cx,
+            ));
             let mut downloads = Self::settings_group("Downloads", cx).child(self.setting_button(
                 "downloadFolder",
                 format!("Download folder: {folder}"),
@@ -816,37 +840,18 @@ impl Home {
                 );
         }
         if self.navigation_error {
-            content = content.child(div().text_color(cx.theme().danger).child(semantic_text(
+            content = content.child(ui::error_text(
                 "settings-error",
                 "Could not save settings. Try again.",
-            )));
+                cx,
+            ));
         }
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(cx.theme().background.opacity(0.88))
-            .text_color(cx.theme().foreground)
-            .child(
-                div()
-                    .p_4()
-                    .flex()
-                    .gap_4()
-                    .child(Button::new("settings-back").label("Back").large().on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.screen = 0;
-                            set_screen(0, Ordering::Release);
-                            let _ = notify_screen("home");
-                            cx.notify();
-                        }),
-                    ))
-                    .child(
-                        div()
-                            .text_2xl()
-                            .font_semibold()
-                            .child(semantic_text("settings-heading", "Settings")),
-                    ),
-            )
+        ui::page(cx)
+            .child(ui::header(
+                self.back_button("settings-back", cx),
+                "settings-heading",
+                "Settings",
+            ))
             .child(content)
     }
 }
@@ -862,7 +867,6 @@ impl Home {
         Button::new(id)
             .label(label)
             .large()
-            .w_full()
             .on_click(cx.listener(move |this, _, _, cx| {
                 match read_queue(offset) {
                     Ok(queue) => {
@@ -877,30 +881,23 @@ impl Home {
     }
 
     fn render_queue(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut content = semantic_scroll("native-queue", &self.scrolls[3])
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p_4()
-            .gap_4();
+        let mut content = ui::body("native-queue", &self.scrolls[Screen::Queue as usize]);
         let privacy = self
             .settings
             .as_ref()
             .is_none_or(|settings| settings.inspection_privacy);
         if let Some(queue) = &self.queue {
             if queue.network_state != 0 {
-                content = content.child(div().child(semantic_text(
+                let mut network = ui::card(cx).child(ui::card_title(
                     "queue-network-state",
                     match queue.network_state {
                         2 => "Waiting for unmetered Wi-Fi",
                         3 => "Waiting for mobile-data approval",
                         _ => "Waiting for an internet connection",
                     },
-                )));
+                ));
                 if queue.network_state == 3 {
-                    content = content.child(
+                    network = network.child(
                         Button::new("queue-mobile-approval")
                             .label("Allow mobile data…")
                             .large()
@@ -911,14 +908,20 @@ impl Home {
                             })),
                     );
                 }
-                content = content.child(self.destination("settings", "Download settings", cx));
+                content = content.child(network.child(self.destination(
+                    "settings",
+                    "Download settings",
+                    cx,
+                )));
             }
             if queue.items.is_empty() {
-                content = content.child(
-                    div().child(semantic_text("queue-empty", "The download queue is empty.")),
-                );
+                content = content.child(ui::card(cx).child(ui::muted_text(
+                    "queue-empty",
+                    "The download queue is empty.",
+                    cx,
+                )));
             } else {
-                content = content.child(div().child(semantic_text(
+                content = content.child(ui::muted_text(
                     "lib-remaining-text-2",
                     format!(
                         "{}–{} of {} downloads",
@@ -926,7 +929,8 @@ impl Home {
                         queue.offset + queue.items.len(),
                         queue.total
                     ),
-                )));
+                    cx,
+                ));
             }
             for item in &queue.items {
                 let title = if privacy {
@@ -934,23 +938,31 @@ impl Home {
                 } else {
                     item.title.clone()
                 };
-                let mut row = div()
+                let mut row = ui::card(cx)
                     .id(format!("queue-row-{}", item.id))
-                    .flex()
-                    .flex_col()
                     .gap_2()
-                    .p_4()
-                    .bg(cx.theme().muted)
                     .child(
                         div()
                             .font_semibold()
                             .child(semantic_text("queue-title", title)),
                     )
-                    .child(div().child(semantic_text("queue-phase", item.phase_label.clone())))
-                    .child(div().child(semantic_text(
-                        "queue-progress",
-                        transfer_progress(item.downloaded, item.total),
-                    )));
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_x_3()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(semantic_text("queue-phase", item.phase_label.clone()))
+                            .child(semantic_text(
+                                "queue-progress",
+                                transfer_progress(item.downloaded, item.total),
+                            )),
+                    );
+                if !privacy && let Some(quality) = &item.quality {
+                    row = row.child(ui::muted_text("queue-quality", quality.clone(), cx));
+                }
+                let mut actions = ui::button_row();
                 for action in item
                     .actions
                     .iter()
@@ -965,23 +977,21 @@ impl Home {
                         _ => continue,
                     };
                     let id = item.id.clone();
+                    let primary = action == "play" || action == "resume";
                     let action = action.to_owned();
-                    row = row.child(
+                    actions = actions.child(
                         Button::new(SharedString::from(format!("queue-{id}-{action}")))
                             .label(label)
                             .large()
-                            .w_full()
+                            .when(primary, |button| button.primary())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.navigation_error = change_queue_item(&id, &action).is_err();
                                 cx.notify();
                             })),
                     );
                 }
-                if !privacy && let Some(quality) = &item.quality {
-                    row = row.child(div().child(semantic_text("queue-quality", quality.clone())));
-                }
                 if item.issue {
-                    row = row.child(div().text_color(cx.theme().danger).child(semantic_text(
+                    row = row.child(ui::error_text(
                         "queue-issue",
                         if privacy {
                             "Download failed. Try resuming.".to_owned()
@@ -990,12 +1000,14 @@ impl Home {
                                 .clone()
                                 .unwrap_or_else(|| "Download failed. Try resuming.".to_owned())
                         },
-                    )));
+                        cx,
+                    ));
                 }
-                content = content.child(row);
+                content = content.child(row.child(actions));
             }
+            let mut pages = ui::button_row();
             if let Some(offset) = queue.previous_offset {
-                content = content.child(self.queue_page_button(
+                pages = pages.child(self.queue_page_button(
                     "queue-previous",
                     "Previous downloads",
                     offset,
@@ -1003,78 +1015,45 @@ impl Home {
                 ));
             }
             if let Some(offset) = queue.next_offset {
-                content = content.child(self.queue_page_button(
-                    "queue-next",
-                    "Next downloads",
-                    offset,
-                    cx,
-                ));
+                pages =
+                    pages.child(self.queue_page_button("queue-next", "Next downloads", offset, cx));
             }
-            content = content.child(self.queue_page_button(
+            content = content.child(pages.child(self.queue_page_button(
                 "queue-refresh",
                 "Refresh",
                 queue.offset as i32,
                 cx,
-            ));
+            )));
             if !queue.ok {
-                content = content.child(
-                    div()
-                        .text_color(cx.theme().danger)
-                        .child(semantic_text("queue-detail", queue.detail.clone())),
-                );
+                content = content.child(ui::error_text("queue-detail", queue.detail.clone(), cx));
             }
         }
         if self.navigation_error {
-            content = content.child(div().text_color(cx.theme().danger).child(semantic_text(
+            content = content.child(ui::error_text(
                 "queue-action-error",
                 "Queue action unavailable. Try again.",
-            )));
+                cx,
+            ));
         }
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(cx.theme().background.opacity(0.88))
-            .text_color(cx.theme().foreground)
-            .child(
-                div()
-                    .p_4()
-                    .flex()
-                    .gap_4()
-                    .child(
-                        Button::new("queue-back")
-                            .label("Back")
-                            .large()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.screen = 0;
-                                set_screen(0, Ordering::Release);
-                                let _ = notify_screen("home");
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_2xl()
-                            .font_semibold()
-                            .child(semantic_text("home-queue-heading", "Download queue")),
-                    ),
-            )
+        ui::page(cx)
+            .child(ui::header(
+                self.back_button("queue-back", cx),
+                "home-queue-heading",
+                "Download queue",
+            ))
             .child(content)
     }
 }
 
 impl Home {
     fn render_diagnostics(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut content = semantic_scroll("native-diagnostics", &self.scrolls[4])
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p_4()
-            .gap_4();
+        let mut content = ui::body(
+            "native-diagnostics",
+            &self.scrolls[Screen::Diagnostics as usize],
+        );
         if let Some(diagnostics) = &self.diagnostics {
             let data = &diagnostics.data;
+            let mut metrics = ui::card(cx).gap_2();
             for (index, text) in [
                 diagnostics.detail.clone(),
                 format!(
@@ -1128,14 +1107,20 @@ impl Home {
             .into_iter()
             .enumerate()
             {
-                content = content
-                    .child(div().child(semantic_text(format!("diagnostic-metric-{index}"), text)));
+                let id = format!("diagnostic-metric-{index}");
+                metrics = metrics.child(if index == 0 {
+                    ui::muted_text(id, text, cx)
+                } else {
+                    div().child(semantic_text(id, text))
+                });
             }
+            content = content.child(metrics);
             if !diagnostics.ok {
-                content = content.child(div().text_color(cx.theme().danger).child(semantic_text(
+                content = content.child(ui::error_text(
                     "diagnostics-unavailable",
                     "Some diagnostics are unavailable.",
-                )));
+                    cx,
+                ));
             }
             content = content.child(
                 Button::new("copy-diagnostics")
@@ -1149,40 +1134,18 @@ impl Home {
             );
         }
         if self.navigation_error {
-            content = content.child(div().text_color(cx.theme().danger).child(semantic_text(
+            content = content.child(ui::error_text(
                 "diagnostics-error",
                 "Diagnostics action unavailable. Try again.",
-            )));
+                cx,
+            ));
         }
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(cx.theme().background.opacity(0.88))
-            .text_color(cx.theme().foreground)
-            .child(
-                div()
-                    .p_4()
-                    .flex()
-                    .gap_4()
-                    .child(
-                        Button::new("diagnostics-back")
-                            .label("Back")
-                            .large()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.screen = 0;
-                                set_screen(0, Ordering::Release);
-                                let _ = notify_screen("home");
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_2xl()
-                            .font_semibold()
-                            .child(semantic_text("diagnostics-heading", "Diagnostics")),
-                    ),
-            )
+        ui::page(cx)
+            .child(ui::header(
+                self.back_button("diagnostics-back", cx),
+                "diagnostics-heading",
+                "Diagnostics",
+            ))
             .child(content)
     }
 }
@@ -1199,7 +1162,6 @@ impl Home {
         Button::new(id)
             .label(label)
             .large()
-            .w_full()
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.navigation_error = request_library(offset, &location).is_err();
                 cx.notify();
@@ -1211,14 +1173,7 @@ impl Home {
             .settings
             .as_ref()
             .is_none_or(|settings| settings.inspection_privacy);
-        let mut content = semantic_scroll("native-library", &self.scrolls[5])
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p_4()
-            .gap_4()
+        let mut content = ui::body("native-library", &self.scrolls[Screen::Library as usize])
             .child(
                 Button::new("library-search")
                     .label("Search and filter library")
@@ -1231,24 +1186,18 @@ impl Home {
             );
         if let Some(page) = &self.library {
             if page.title == "Continue watching" || page.title == "Up Next" {
-                content = content.child(
-                    div()
-                        .font_semibold()
-                        .child(semantic_text("library-filter-title", page.title.clone())),
-                );
+                content = content.child(ui::card_title("library-filter-title", page.title.clone()));
             }
             if !page.ok {
-                content = content.child(
-                    div()
-                        .text_color(cx.theme().danger)
-                        .child(semantic_text("library-detail", page.detail.clone())),
-                );
+                content = content.child(ui::error_text("library-detail", page.detail.clone(), cx));
             } else if page.items.is_empty() {
-                content = content.child(
-                    div().child(semantic_text("library-empty", "No matching library items.")),
-                );
+                content = content.child(ui::card(cx).child(ui::muted_text(
+                    "library-empty",
+                    "No matching library items.",
+                    cx,
+                )));
             } else {
-                content = content.child(div().child(semantic_text(
+                content = content.child(ui::muted_text(
                     "lib-remaining-text-3",
                     format!(
                         "{}–{} of {} items",
@@ -1256,7 +1205,8 @@ impl Home {
                         page.offset + page.items.len(),
                         page.total
                     ),
-                )));
+                    cx,
+                ));
             }
             for item in &page.items {
                 let title = if privacy {
@@ -1274,19 +1224,15 @@ impl Home {
                 } else {
                     item.subtitle.clone()
                 };
-                let mut card = div()
+                let mut card = ui::card(cx)
                     .id(format!("library-card-{}", item.id))
-                    .flex()
-                    .flex_col()
                     .gap_2()
-                    .p_4()
-                    .bg(cx.theme().muted)
                     .child(
                         div()
                             .font_semibold()
                             .child(semantic_text("library-title", title)),
                     )
-                    .child(div().child(semantic_text("library-subtitle", subtitle)));
+                    .child(ui::muted_text("library-subtitle", subtitle, cx));
                 if !privacy
                     && item.has_thumbnail
                     && let Ok(path) = library_thumbnail(&item.id)
@@ -1296,21 +1242,23 @@ impl Home {
                         img(std::path::PathBuf::from(path))
                             .h_40()
                             .w_full()
+                            .rounded_md()
                             .object_fit(ObjectFit::Cover),
                     );
                 }
                 if item.watched {
-                    card = card.child(div().child(semantic_text("library-watched", "Watched")));
+                    card = card.child(ui::muted_text("library-watched", "Watched", cx));
                 } else if let Some(progress) =
                     progress::playback_progress(item.position_seconds, item.duration_seconds)
                 {
-                    card = card.child(div().child(semantic_text("library-progress", progress)));
+                    card = card.child(ui::muted_text("library-progress", progress, cx));
                 }
                 let id = item.id.clone();
                 if item.kind == "playlist" {
                     card = card.child(
                         Button::new(SharedString::from(format!("folder-{id}")))
                             .label("Open playlist")
+                            .primary()
                             .large()
                             .w_full()
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1319,6 +1267,7 @@ impl Home {
                             })),
                     );
                 } else {
+                    let mut actions = ui::button_row();
                     for (action, label, visible) in [
                         ("play", "Open player", true),
                         ("share", "Share", item.can_share),
@@ -1334,22 +1283,25 @@ impl Home {
                             continue;
                         }
                         let id = item.id.clone();
-                        card = card.child(
+                        actions = actions.child(
                             Button::new(SharedString::from(format!("library-{id}-{action}")))
                                 .label(label)
                                 .large()
-                                .w_full()
+                                .when(action == "play", |button| button.primary())
+                                .when(action == "delete", |button| button.danger())
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.navigation_error = library_action(&id, action).is_err();
                                     cx.notify();
                                 })),
                         );
                     }
+                    card = card.child(actions);
                 }
                 content = content.child(card);
             }
+            let mut pages = ui::button_row();
             if let Some(offset) = page.previous_offset {
-                content = content.child(self.library_page_button(
+                pages = pages.child(self.library_page_button(
                     "library-previous",
                     "Previous items",
                     offset,
@@ -1358,7 +1310,7 @@ impl Home {
                 ));
             }
             if let Some(offset) = page.next_offset {
-                content = content.child(self.library_page_button(
+                pages = pages.child(self.library_page_button(
                     "library-next",
                     "Next items",
                     offset,
@@ -1366,28 +1318,28 @@ impl Home {
                     cx,
                 ));
             }
-            content = content.child(self.library_page_button(
+            content = content.child(pages.child(self.library_page_button(
                 "library-refresh",
                 "Refresh",
                 page.offset as i32,
                 page.location.clone(),
                 cx,
-            ));
+            )));
         } else {
-            content =
-                content.child(div().child(semantic_text("library-loading", "Loading library…")));
+            content = content.child(ui::card(cx).child(ui::muted_text(
+                "library-loading",
+                "Loading library…",
+                cx,
+            )));
         }
         content = content.child(
             Button::new("native-discover")
                 .label("Discover downloads")
                 .large()
                 .w_full()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    set_screen(6, Ordering::Release);
-                    this.screen = 6;
-                    let _ = notify_screen("discovery");
-                    cx.notify();
-                })),
+                .on_click(
+                    cx.listener(|this, _, _, cx| this.navigate(Screen::Discovery, "discovery", cx)),
+                ),
         );
         content = content.child(
             Button::new("library-receive")
@@ -1410,12 +1362,7 @@ impl Home {
                     cx.notify();
                 })),
         );
-        content = content.child(
-            div()
-                .font_semibold()
-                .child(semantic_text("library-tools-heading", "Library tools")),
-        );
-        for (id, label) in [
+        let tools = [
             ("anime", "Anime catalog"),
             ("activity", "Activity Center"),
             ("queue", "Download queue"),
@@ -1423,14 +1370,21 @@ impl Home {
             ("diagnostics", "Diagnostics"),
             ("settings", "Settings"),
             ("changelog", "What's new"),
-        ] {
-            content = content.child(self.destination(id, label, cx));
-        }
+        ]
+        .into_iter()
+        .map(|(id, label)| self.destination(id, label, cx))
+        .collect();
+        content = content.child(
+            ui::card(cx)
+                .child(ui::card_title("library-tools-heading", "Library tools"))
+                .child(ui::button_grid(tools)),
+        );
         if self.navigation_error {
-            content = content.child(div().text_color(cx.theme().danger).child(semantic_text(
+            content = content.child(ui::error_text(
                 "library-action-error",
                 "Library action unavailable. Try again.",
-            )));
+                cx,
+            ));
         }
         let heading = if privacy {
             "Library".to_owned()
@@ -1440,50 +1394,30 @@ impl Home {
                 .map(|page| page.title.clone())
                 .unwrap_or_else(|| "Library".to_owned())
         };
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(cx.theme().background.opacity(0.88))
-            .text_color(cx.theme().foreground)
-            .child(
-                div()
-                    .p_4()
-                    .flex()
-                    .gap_4()
-                    .child(
-                        Button::new("library-back")
-                            .label("Back")
-                            .large()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if this
-                                    .library
-                                    .as_ref()
-                                    .is_some_and(|page| !page.location.is_empty())
-                                {
-                                    this.navigation_error = request_library(0, "").is_err();
-                                } else {
-                                    this.screen = 0;
-                                    set_screen(0, Ordering::Release);
-                                    let _ = notify_screen("home");
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_2xl()
-                            .font_semibold()
-                            .child(semantic_text("library-heading", heading)),
-                    ),
-            )
+        let back = Button::new("library-back")
+            .label("Back")
+            .large()
+            .on_click(cx.listener(|this, _, _, cx| {
+                if this
+                    .library
+                    .as_ref()
+                    .is_some_and(|page| !page.location.is_empty())
+                {
+                    this.navigation_error = request_library(0, "").is_err();
+                    cx.notify();
+                } else {
+                    this.navigate(Screen::Home, "home", cx);
+                }
+            }));
+        ui::page(cx)
+            .child(ui::header(back, "library-heading", heading))
             .child(content)
     }
 }
 
 impl Home {
     fn render_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let privacy = if self.screen == 14 {
+        let privacy = if self.screen == Screen::StreamingDecoder {
             self.streaming_decoder
                 .as_ref()
                 .is_none_or(|page| page.privacy)
@@ -1503,65 +1437,41 @@ impl Home {
                 }
             });
         }
-        if self.screen == 7 {
-            return self.render_peers(cx).into_any_element();
-        }
-        if self.screen == 6 {
-            return self.render_discovery(cx).into_any_element();
-        }
-        if self.screen == 14 {
-            return self
-                .streaming_decoder
-                .clone()
-                .unwrap_or_default()
-                .view(cx, &self.scrolls[14])
-                .into_any_element();
-        }
-        if self.screen == 13 {
-            return self
+        match self.screen {
+            Screen::Home => self.render_home(cx).into_any_element(),
+            Screen::History => self.render_history(window, cx).into_any_element(),
+            Screen::Settings => self.render_settings(cx).into_any_element(),
+            Screen::Queue => self.render_queue(cx).into_any_element(),
+            Screen::Diagnostics => self.render_diagnostics(cx).into_any_element(),
+            Screen::Library => self.render_library(cx).into_any_element(),
+            Screen::Discovery => self.render_discovery(cx).into_any_element(),
+            Screen::Peers => self.render_peers(cx).into_any_element(),
+            Screen::Anime => self.render_anime(window, cx).into_any_element(),
+            Screen::Storage => self.render_storage(cx).into_any_element(),
+            Screen::Activity => self.render_activity(cx).into_any_element(),
+            Screen::Updates => self.render_updates(cx).into_any_element(),
+            Screen::Player => self.render_player(window, cx).into_any_element(),
+            Screen::Streaming => self
                 .streaming
                 .clone()
                 .unwrap_or_default()
                 .view(
                     self.settings.as_ref().is_none_or(|s| s.inspection_privacy),
                     cx,
-                    &self.scrolls[13],
+                    &self.scrolls[Screen::Streaming as usize],
                 )
-                .into_any_element();
+                .into_any_element(),
+            Screen::StreamingDecoder => self
+                .streaming_decoder
+                .clone()
+                .unwrap_or_default()
+                .view(cx, &self.scrolls[Screen::StreamingDecoder as usize])
+                .into_any_element(),
+            Screen::MiniPlayer => self.render_mini_player(cx).into_any_element(),
         }
-        if self.screen == 15 {
-            return self.render_mini_player(cx).into_any_element();
-        }
-        if self.screen == 12 {
-            return self.render_player(window, cx).into_any_element();
-        }
-        if self.screen == 11 {
-            return self.render_updates(cx).into_any_element();
-        }
-        if self.screen == 10 {
-            return self.render_activity(cx).into_any_element();
-        }
-        if self.screen == 9 {
-            return self.render_storage(cx).into_any_element();
-        }
-        if self.screen == 8 {
-            return self.render_anime(window, cx).into_any_element();
-        }
-        if self.screen == 5 {
-            return self.render_library(cx).into_any_element();
-        }
-        if self.screen == 4 {
-            return self.render_diagnostics(cx).into_any_element();
-        }
-        if self.screen == 3 {
-            return self.render_queue(cx).into_any_element();
-        }
-        if self.screen == 2 {
-            return self.render_settings(cx).into_any_element();
-        }
-        if self.screen == 1 {
-            return self.render_history(window, cx).into_any_element();
-        }
+    }
+
+    fn render_home(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let transfers = self.transfers;
         let status = if transfers.active == 0 {
             "Queue is idle".to_owned()
@@ -1576,132 +1486,78 @@ impl Home {
                 }
             )
         };
-        div()
+        let tools = [
+            ("storage", "Storage"),
+            ("activity", "Activity Center"),
+            ("updates", "Updates"),
+            ("settings", "Settings"),
+            ("diagnostics", "Diagnostics"),
+            ("changelog", "What's new"),
+        ]
+        .into_iter()
+        .map(|(id, label)| self.destination(id, label, cx))
+        .collect();
+        ui::page(cx)
             .relative()
-            .flex()
-            .flex_col()
-            .size_full()
             .overflow_hidden()
-            .bg(cx.theme().background.opacity(0.88))
-            .text_color(cx.theme().foreground)
             .child(
                 div()
                     .relative()
                     .p_4()
-                    .text_2xl()
-                    .font_semibold()
                     .flex()
                     .flex_col()
-                    .gap_2()
-                    .child(semantic_text("home-title", "RustDL"))
+                    .gap_1()
                     .child(
                         div()
-                            .text_sm()
-                            .font_normal()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(semantic_text(
-                                "home-subtitle",
-                                "Your library. Your next episode.",
-                            )),
-                    ),
+                            .text_2xl()
+                            .font_semibold()
+                            .child(semantic_text("home-title", "RustDL")),
+                    )
+                    .child(ui::muted_text(
+                        "home-subtitle",
+                        "Your library. Your next episode.",
+                        cx,
+                    )),
             )
             .child(
-                semantic_scroll("home-content", &self.scrolls[0])
+                ui::body("home-content", &self.scrolls[Screen::Home as usize])
                     .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .p_4()
-                    .gap_4()
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .p_4()
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .bg(cx.theme().muted.opacity(0.45))
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .font_semibold()
-                                    .child(semantic_text("home-library-heading", "Watch")),
-                            )
+                        ui::card(cx)
+                            .child(ui::card_title("home-library-heading", "Watch"))
                             .child(self.destination("library", "Open library", cx))
                             .child(self.destination("anime", "Browse anime", cx)),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .p_4()
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .bg(cx.theme().muted.opacity(0.45))
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .font_semibold()
-                                    .child(semantic_text("home-queue-heading", "Download queue")),
-                            )
+                        ui::card(cx)
+                            .child(ui::card_title("home-queue-heading", "Download queue"))
                             .child(
                                 div()
                                     .text_color(cx.theme().muted_foreground)
                                     .child(semantic_text("home-queue-status", status)),
                             )
                             .when(transfers.active > 0, |view| {
-                                view.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(semantic_text(
-                                            "lib-remaining-text-4",
-                                            transfer_progress(
-                                                transfers.downloaded,
-                                                transfers.total,
-                                            ),
-                                        )),
-                                )
+                                view.child(ui::muted_text(
+                                    "lib-remaining-text-4",
+                                    transfer_progress(transfers.downloaded, transfers.total),
+                                    cx,
+                                ))
                             })
                             .child(self.destination("queue", "Open download queue", cx)),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .p_4()
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .bg(cx.theme().muted.opacity(0.45))
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .font_semibold()
-                                    .child(semantic_text("home-tools-heading", "Tools")),
-                            )
-                            .child(self.destination("storage", "Storage", cx))
-                            .child(self.destination("activity", "Activity Center", cx))
-                            .child(self.destination("updates", "Updates", cx))
-                            .child(self.destination("settings", "Settings", cx))
-                            .child(self.destination("diagnostics", "Diagnostics", cx))
-                            .child(self.destination("changelog", "What's new", cx)),
+                        ui::card(cx)
+                            .child(ui::card_title("home-tools-heading", "Tools"))
+                            .child(ui::button_grid(tools)),
                     )
                     .when(self.navigation_error, |view| {
-                        view.child(div().text_color(cx.theme().danger).child(semantic_text(
+                        view.child(ui::error_text(
                             "home-route-error",
                             "Could not open that screen. Try again.",
-                        )))
+                            cx,
+                        ))
                     }),
             )
-            .into_any_element()
     }
 }
 
@@ -1892,7 +1748,7 @@ pub extern "system" fn Java_app_rustdl_NativeHomeHost_nativeBack(
     _env: EnvUnowned,
     _class: JClass,
 ) -> jboolean {
-    if SCREEN.load(Ordering::Acquire) == 5 {
+    if Screen::current() == Screen::Library {
         let in_folder = LIBRARY
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -1903,7 +1759,7 @@ pub extern "system" fn Java_app_rustdl_NativeHomeHost_nativeBack(
             return true;
         }
     }
-    if SCREEN.swap(0, Ordering::AcqRel) != 0 {
+    if SCREEN.swap(Screen::Home as u8, Ordering::AcqRel) != Screen::Home as u8 {
         let _ = signal().0.try_send(());
         true
     } else {
@@ -1970,8 +1826,8 @@ pub extern "system" fn Java_app_rustdl_NativeHomeHost_nativeSettings<'local>(
         .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
 }
 
-fn set_screen(screen: u8, ordering: Ordering) {
-    if SCREEN.swap(screen, ordering) != screen {
+fn set_screen(screen: Screen, ordering: Ordering) {
+    if SCREEN.swap(screen as u8, ordering) != screen as u8 {
         ANIME_SCROLL
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -2051,7 +1907,7 @@ pub extern "system" fn Java_app_rustdl_NativeHomeHost_nativeShowQueue(
     _env: EnvUnowned,
     _class: JClass,
 ) {
-    set_screen(3, Ordering::Release);
+    set_screen(Screen::Queue, Ordering::Release);
     let _ = signal().0.try_send(());
 }
 
@@ -2239,7 +2095,7 @@ pub extern "system" fn Java_app_rustdl_NativeHomeHost_nativeShowDiscovery(
     _env: EnvUnowned,
     _class: JClass,
 ) {
-    set_screen(6, Ordering::Release);
+    set_screen(Screen::Discovery, Ordering::Release);
     let _ = notify_screen("discovery");
     let _ = signal().0.try_send(());
 }
@@ -2250,7 +2106,7 @@ pub extern "system" fn Java_app_rustdl_NativeHomeHost_nativeShowPeers(
     _class: JClass,
 ) {
     *PEERS.lock().unwrap_or_else(|p| p.into_inner()) = None;
-    set_screen(7, Ordering::Release);
+    set_screen(Screen::Peers, Ordering::Release);
     let _ = notify_screen("peers");
     let _ = signal().0.try_send(());
 }
@@ -2362,7 +2218,7 @@ pub extern "system" fn Java_app_rustdl_NativeHomeHost_nativeShowPlayer(
     _class: JClass,
 ) {
     *PLAYER.lock().unwrap_or_else(|p| p.into_inner()) = None;
-    set_screen(12, Ordering::Release);
+    set_screen(Screen::Player, Ordering::Release);
     let _ = notify_screen("player");
     let _ = signal().0.try_send(());
 }
@@ -2389,7 +2245,7 @@ pub extern "system" fn Java_app_rustdl_NativeHomeHost_nativeShowStreaming(
     _class: JClass,
 ) {
     *STREAMING.lock().unwrap_or_else(|p| p.into_inner()) = None;
-    set_screen(13, Ordering::Release);
+    set_screen(Screen::Streaming, Ordering::Release);
     let _ = notify_screen("streaming");
     let _ = signal().0.try_send(());
 }
@@ -2399,7 +2255,7 @@ pub extern "system" fn Java_app_rustdl_NativeHomeHost_nativeSelectStreamingDecod
     _env: EnvUnowned,
     _class: JClass,
 ) {
-    set_screen(14, Ordering::Release);
+    set_screen(Screen::StreamingDecoder, Ordering::Release);
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_app_rustdl_NativeHomeHost_nativeStreamingDecoder<'local>(
@@ -2433,9 +2289,9 @@ pub extern "system" fn Java_app_rustdl_NativeHomeHost_nativePlayerLayout(
     layout: jint,
 ) {
     let (screen, name) = match layout {
-        0 => (12, "player"),
-        1 => (15, "mini-player"),
-        2 => (5, "library"),
+        0 => (Screen::Player, "player"),
+        1 => (Screen::MiniPlayer, "mini-player"),
+        2 => (Screen::Library, "library"),
         _ => return,
     };
     set_screen(screen, Ordering::Release);
@@ -2447,18 +2303,14 @@ impl Render for Home {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         gpui_mobile::rustdl_accessibility::set_context(
             PRIVACY_REVISION.load(Ordering::Acquire),
-            self.screen,
+            self.screen as u8,
         );
         let content = self.render_content(window, cx);
-        if self.screen == 14 {
+        if self.screen == Screen::StreamingDecoder {
             return content;
         }
-        let scroll = &self.scrolls[if self.screen == 15 {
-            5
-        } else {
-            usize::from(self.screen).min(15)
-        }];
-        let (scroll_offset, scroll_max) = if self.screen == 1 {
+        let scroll = &self.scrolls[self.screen.scroll_index()];
+        let (scroll_offset, scroll_max) = if self.screen == Screen::History {
             (
                 self.history_list.scroll_px_offset_for_scrollbar(),
                 self.history_list.max_offset_for_scrollbar(),
@@ -2575,13 +2427,13 @@ pub extern "system" fn Java_app_rustdl_NativeVisualHost_nativeVisual<'local>(
         *SETTINGS.lock().unwrap_or_else(|p|p.into_inner())=
             serde_json::from_str(r#"{"ok":true,"detail":"","downloadFolder":"Synthetic","keepScreenAwake":false,"allowScreenshots":true,"inspectionPrivacy":true,"diagnosticsRefreshSeconds":15,"appearance":"dark","backgroundTheme":"plain","spaceEffectEnabled":false,"reduceMotion":true,"mobileDownloadPolicy":"wifi"}"#).ok();
         let selected=match screen.as_str() {
-            "history"=>1, "settings"=>2, "anime"=>{
+            "history"=>Screen::History, "settings"=>Screen::Settings, "anime"=>{
                 *ANIME.lock().unwrap_or_else(|p|p.into_inner())=Some(anime::Page{
                     ok:true,kind:"catalog".into(),page:1,pages:3,
                     items:(0..12).map(|index|anime::Item{id:format!("synthetic-{index}"),title:"Synthetic anime".into(),poster_width: match index % 3 {0=>2,1=>1,_=>16},poster_height: match index % 3 {0=>3,1=>1,_=>9},sub:Some("12".into()),dub:Some("6".into()),..Default::default()}).collect(),
                     ..Default::default()
-                });8
-            }, _=>0
+                });Screen::Anime
+            }, _=>Screen::Home
         };
         set_screen(selected,Ordering::Release);
         PRIVACY_REVISION.fetch_add(1,Ordering::AcqRel);

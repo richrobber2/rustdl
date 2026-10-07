@@ -8,6 +8,10 @@ pub(in super::super::super) const CHANGELOG: &[(&str, &[&str])] = &[
     (
         "0.1.45",
         &[
+            "Gave every native GPUI screen the same top header with Back and title; Storage, Activity Center, Updates, Discover downloads, Anime and Device transfers no longer place Back at the bottom of the page and now draw the shared translucent page surface over the background.",
+            "Restyled native Queue, Library, Storage, Activity and Discovery items as bordered cards with muted secondary text, compact wrapping action rows (Open player, Play and Resume emphasized, Delete marked as destructive) and Previous/Next/Refresh grouped on one row instead of stacked full-width buttons.",
+            "Showed native empty and loading states inside cards, grouped Storage usage and cleanup actions, Activity status and Diagnostics metrics into cards, colored every native action and load error with the theme's danger color, and laid out Home and Library tool links in a two-column grid.",
+            "Replaced numeric native screen identifiers with a typed screen enum that keeps the existing Java and accessibility values, and moved shared page, header, card, text and button-row styling into one module; inspection-privacy masking and semantic text identifiers are unchanged.",
             "Used Android’s timestamped velocity tracker and OverScroller for native anime pans and release momentum, retained one physical-to-logical distance conversion, stopped flings on new touches or lifecycle/navigation changes and rejected stale scroll callbacks.",
             "Kept native anime collage cards in stable columns when cached poster dimensions arrive, preventing asynchronous previews from reassigning tiles during scrolling while preserving each thumbnail’s proportions.",
             "Arranged native anime previews in responsive staggered collage columns using cached poster dimensions to retain each image’s original proportions without cropping; retained episode and watchlist actions, inspection-safe placeholders and mixed-ratio synthetic review fixtures.",
