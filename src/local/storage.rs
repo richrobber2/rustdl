@@ -538,10 +538,23 @@ pub(in super::super) fn respond_storage_action(
         return local::html::respond_text(request, 403, "Storage action expired");
     }
     let action = value("action").unwrap_or_default();
-    let result = (|| -> Result<String, Box<dyn Error>> {
-        let notice = match action.as_str() {
+    let result = cleanup_storage(output_dir, &action, value("file").as_deref());
+    match result {
+        Ok(notice) => local::storage::respond_storage_page(request, output_dir, Some(&notice)),
+        Err(error) => local::html::respond_text(request, 422, &format!("Cleanup failed: {error}")),
+    }
+}
+
+/// Shared cleanup engine. Interface adapters provide validation and explicit confirmation.
+pub(in super::super) fn cleanup_storage(
+    output_dir: &Path,
+    action: &str,
+    filename: Option<&str>,
+) -> Result<String, Box<dyn Error>> {
+    (|| -> Result<String, Box<dyn Error>> {
+        let notice = match action {
             "delete" => {
-                let filename = value("file").ok_or("missing video filename")?;
+                let filename = filename.ok_or("missing video filename")?;
                 local::storage::delete_stored_video(output_dir, &filename)?;
                 format!("Removed {filename} from RustDL and Android Downloads.")
             }
@@ -606,11 +619,7 @@ pub(in super::super) fn respond_storage_action(
             _ => return Err("invalid storage action".into()),
         };
         Ok(notice)
-    })();
-    match result {
-        Ok(notice) => local::storage::respond_storage_page(request, output_dir, Some(&notice)),
-        Err(error) => local::html::respond_text(request, 422, &format!("Cleanup failed: {error}")),
-    }
+    })()
 }
 
 pub(in super::super) fn delete_stored_video(

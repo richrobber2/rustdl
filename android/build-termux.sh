@@ -11,6 +11,8 @@ case "$VARIANT" in
 esac
 DEV=${RUSTDL_DEV:-0}
 case "$DEV" in 0) ;; 1) BUILD_DIR="$BUILD_DIR-dev" ;; *) echo "RUSTDL_DEV must be 0 or 1" >&2; exit 2 ;; esac
+NATIVE_UI=${RUSTDL_NATIVE_UI:-1}
+case "$NATIVE_UI" in 0) ;; 1) BUILD_DIR="$BUILD_DIR-gpui" ;; *) echo "RUSTDL_NATIVE_UI must be 0 or 1" >&2; exit 2 ;; esac
 FRAMEWORK_RES=/system/framework/framework-res.apk
 ANDROID_JAR=${ANDROID_JAR:-}
 
@@ -20,6 +22,14 @@ for TOOL in cargo javac d8 aapt2 jar keytool apksigner; do
         exit 1
     fi
 done
+if [ "$NATIVE_UI" = 1 ]; then
+    for TOOL in clang clang++ llvm-ar llvm-strip llvm-readelf patchelf python3; do
+        if ! command -v "$TOOL" >/dev/null 2>&1; then
+            echo "Missing native UI build tool: $TOOL. Run 'make native-setup' first." >&2
+            exit 1
+        fi
+    done
+fi
 PACKAGE_VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$ROOT_DIR/Cargo.toml" | head -n 1)
 VERSION_NAME=${RUSTDL_VERSION_NAME:-$PACKAGE_VERSION}
 
@@ -70,6 +80,9 @@ if [ ! -f "$ANDROID_JAR" ]; then
 fi
 
 cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release --lib
+if [ "$NATIVE_UI" = 1 ]; then
+    NATIVE_LIBRARY=$(sh "$ROOT_DIR/native-ui/build-termux.sh")
+fi
 
 mkdir -p "$BUILD_DIR"
 find "$BUILD_DIR" -mindepth 1 -delete
@@ -82,6 +95,9 @@ mkdir -p "$SOURCE_DIR"
 cp "$ANDROID_DIR"/*.java "$SOURCE_DIR/"
 cp "$ANDROID_DIR/AndroidManifest.xml" "$SOURCE_DIR/"
 cp -R "$ANDROID_DIR/res" "$SOURCE_DIR/res"
+if [ "$NATIVE_UI" = 1 ]; then
+    python3 "$ROOT_DIR/native-ui/stage-android.py" "$SOURCE_DIR"
+fi
 if [ "$VARIANT" = alongside ]; then
     # Keep Java package/class names stable for the Rust JNI symbols.
     sed -i \
@@ -89,6 +105,7 @@ if [ "$VARIANT" = alongside ]; then
         -e 's/android:label="RustDL"/android:label="RustDL Next"/' \
         -e 's/Download with RustDL/Download with RustDL Next/' \
         -e 's/app.rustdl.preferences/app.rustdl.next.preferences/g' \
+        -e 's/app.rustdl.visual-review/app.rustdl.next.visual-review/g' \
         -e 's/app.rustdl.inspection/app.rustdl.next.inspection/g' \
         -e 's/app.rustdl.action./app.rustdl.next.action./g' \
         "$SOURCE_DIR/AndroidManifest.xml"
@@ -122,7 +139,7 @@ fi
 # Keep Java 8 compatibility; silence only newer JDKs' obsolete-option notices.
 javac --release 8 -Xlint:-options -classpath "$ANDROID_JAR" \
     -d "$BUILD_DIR/classes" \
-    "$SOURCE_DIR"/*.java
+    $(find "$SOURCE_DIR" -name '*.java' -type f)
 
 d8 --lib "$ANDROID_JAR" --output "$BUILD_DIR/dex" \
     $(find "$BUILD_DIR/classes" -name '*.class' -type f)
@@ -137,8 +154,16 @@ aapt2 link -I "$FRAMEWORK_RES" --manifest "$SOURCE_DIR/AndroidManifest.xml" \
 cp "$BUILD_DIR/dex/classes.dex" "$BUILD_DIR/apk/classes.dex"
 cp "$ROOT_DIR/target/release/librustdl.so" \
     "$BUILD_DIR/apk/lib/arm64-v8a/librustdl.so"
+if [ "$NATIVE_UI" = 1 ]; then
+    cp "$NATIVE_LIBRARY" "$BUILD_DIR/apk/lib/arm64-v8a/librustdl_ui.so"
+    llvm-strip --strip-unneeded "$BUILD_DIR/apk/lib/arm64-v8a/librustdl_ui.so"
+    patchelf --remove-rpath "$BUILD_DIR/apk/lib/arm64-v8a/librustdl_ui.so"
+    if llvm-readelf -d "$NATIVE_LIBRARY" | grep -q 'NEEDED.*libc++_shared.so'; then
+        cp "$PREFIX/lib/libc++_shared.so" "$BUILD_DIR/apk/lib/arm64-v8a/"
+    fi
+fi
 (cd "$BUILD_DIR/apk" && jar uf "$BUILD_DIR/rustdl-unsigned.apk" \
-    classes.dex lib/arm64-v8a/librustdl.so)
+    classes.dex lib)
 
 if [ "$DEV" = 1 ]; then
     (cd "$BUILD_DIR/apk" && jar uf "$BUILD_DIR/rustdl-unsigned.apk" assets)

@@ -343,3 +343,421 @@ fn publish_to_android_downloads(source: &Path, filename: &str) -> Result<bool, S
     .and_then(|value| value.z())
     .map_err(|error| error.to_string())
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeDiscoveryCommand<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    action: JString<'local>,
+    payload: JString<'local>,
+    privacy: jboolean,
+) -> jstring {
+    let result = app::local::native_discovery::command(
+        &env.get_string(&action)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        &env.get_string(&payload)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        privacy != 0,
+    );
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativePeerCommand<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    action: JString<'local>,
+    payload: JString<'local>,
+    privacy: jboolean,
+) -> jstring {
+    let result = app::local::native_peers::command(
+        &env.get_string(&action)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        &env.get_string(&payload)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        privacy != 0,
+    );
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeAnimeCommand<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    action: JString<'local>,
+    payload: JString<'local>,
+    privacy: jboolean,
+) -> jstring {
+    let result = app::local::native_anime::command(
+        &env.get_string(&action)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        &env.get_string(&payload)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        privacy != 0,
+    );
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeStorageCommand<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    action: JString<'local>,
+    payload: JString<'local>,
+    privacy: jboolean,
+) -> jstring {
+    let result = app::local::native_storage::command(
+        &env.get_string(&action)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        &env.get_string(&payload)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        privacy != 0,
+    );
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeStreamingCommand<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    action: JString<'local>,
+    payload: JString<'local>,
+    privacy: jboolean,
+) -> jstring {
+    let result = app::local::native_streaming::command(
+        &env.get_string(&action)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        &env.get_string(&payload)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        privacy != 0,
+    );
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeActivitySnapshot<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    payload: JString<'local>,
+    privacy: jboolean,
+) -> jstring {
+    let result = app::local::native_activity::snapshot(
+        &env.get_string(&payload)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        privacy != 0,
+    );
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeQueueData<'local>(
+    env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    offset: jint,
+    privacy: jboolean,
+) -> jstring {
+    let result = app::local::native_api::queue_snapshot(offset.max(0) as usize, privacy != 0);
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeLibraryData<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    offset: jint,
+    location: JString<'local>,
+    search: JString<'local>,
+    privacy: jboolean,
+    resume_selection: JString<'local>,
+) -> jstring {
+    let result = app::local::native_api::library_snapshot(
+        offset.max(0) as usize,
+        &env.get_string(&location)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        &env.get_string(&search)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        privacy != 0,
+        &env.get_string(&resume_selection)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+    );
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeLibraryMedia<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let result = app::local::native_api::library_media(
+        &env.get_string(&id)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeLibrarySource<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let result = app::local::native_api::library_source(
+        &env.get_string(&id)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeQueueMedia<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let result = app::local::native_api::queue_media(
+        &env.get_string(&id)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativePlaybackHandle<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let result = app::local::native_api::playback_handle(
+        &env.get_string(&id)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativePlaybackRoute<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let result = app::local::native_api::playback_route(
+        &env.get_string(&id)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativePlaybackNext<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    id: JString<'local>,
+) -> jstring {
+    let result = app::local::native_api::playback_next(
+        &env.get_string(&id)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeLibraryThumbnail<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    id: JString<'local>,
+    privacy: jboolean,
+) -> jstring {
+    let result = app::local::native_api::library_thumbnail(
+        &env.get_string(&id)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        privacy != 0,
+    )
+    .unwrap_or_default();
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeLibraryDelete<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    id: JString<'local>,
+) -> jboolean {
+    app::local::native_api::library_delete(
+        &env.get_string(&id)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+    ) as jboolean
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeQueueAction<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    id: JString<'local>,
+    action: JString<'local>,
+) -> jboolean {
+    app::local::native_api::queue_action(
+        &env.get_string(&id)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        &env.get_string(&action)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+    ) as jboolean
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativeStreamingSource<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    token: JString<'local>,
+    index: jint,
+) -> jstring {
+    let result = if index < 0 {
+        "{}".into()
+    } else {
+        app::local::native_streaming::source_for_decoder(
+            &env.get_string(&token)
+                .map(|s| String::from(s))
+                .unwrap_or_default(),
+            index as usize,
+        )
+    };
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_MainActivity_nativePlaybackDownloaded<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    id: JString<'local>,
+) -> jlong {
+    app::local::native_api::playback_downloaded(
+        &env.get_string(&id)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+    )
+    .min(i64::MAX as u64) as jlong
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_NativePlaybackService_nativePlaybackRoute<'local>(
+    env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    filename: JString<'local>,
+) -> jstring {
+    Java_app_rustdl_MainActivity_nativePlaybackRoute(env, _receiver, filename)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_NativePlaybackService_nativePlaybackNext<'local>(
+    env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    filename: JString<'local>,
+) -> jstring {
+    Java_app_rustdl_MainActivity_nativePlaybackNext(env, _receiver, filename)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_NativePlaybackService_nativePlaybackDownloaded<'local>(
+    env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    filename: JString<'local>,
+) -> jlong {
+    Java_app_rustdl_MainActivity_nativePlaybackDownloaded(env, _receiver, filename)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_NativePlaybackService_nativePlaybackDetails<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    filename: JString<'local>,
+    privacy: jboolean,
+) -> jstring {
+    let result = app::local::native_api::playback_details(
+        &env.get_string(&filename)
+            .map(|s| String::from(s))
+            .unwrap_or_default(),
+        privacy != 0,
+    );
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_rustdl_NativePlaybackService_nativePlaybackArtwork<'local>(
+    mut env: JNIEnv<'local>,
+    _receiver: JObject<'local>,
+    filename: JString<'local>,
+    privacy: jboolean,
+) -> jstring {
+    let name = env
+        .get_string(&filename)
+        .map(|s| String::from(s))
+        .unwrap_or_default();
+    let result = app::local::native_api::playback_artwork(&name, privacy != 0).unwrap_or_default();
+    env.new_string(result)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}

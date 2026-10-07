@@ -232,6 +232,10 @@ pub(in super::super) fn handle_request(
             let refresh = parsed
                 .query_pairs()
                 .any(|(key, value)| key == "refresh" && value == "1");
+            let native_token = parsed
+                .query_pairs()
+                .find(|(key, _)| key == "nativeToken")
+                .map(|(_, value)| value.into_owned());
             workflows::streaming::respond_stream_manifest(
                 request,
                 client,
@@ -239,6 +243,7 @@ pub(in super::super) fn handle_request(
                 watch_url.as_deref(),
                 episode.as_deref(),
                 refresh,
+                native_token.as_deref(),
             )
         }
         "/__inspect/result" if local::runtime::inspection_mode() => {
@@ -298,6 +303,7 @@ pub(in super::super) fn handle_request(
             local::pages::settings::respond(request)
         }
         "/changelog" => local::pages::changelog::respond(request),
+        "/__app/changelog.json" => local::pages::changelog::respond_batch(request),
         "/streaming" if !local::runtime::inspection_mode() => {
             let page = parsed
                 .query_pairs()

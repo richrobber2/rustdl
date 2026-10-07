@@ -499,16 +499,20 @@ pub(in super::super) struct CalendarCard<'a> {
     pub(in super::super) unavailable: bool,
 }
 
-pub(crate) fn render_calendar(
-    entries: &[WatchlistEntry],
-    schedules: &HashMap<String, Result<StreamSchedule, String>>,
+pub(in super::super) struct CalendarModel<'a> {
+    pub groups: [Vec<CalendarCard<'a>>; 8],
+    pub seen: Vec<CalendarSeen>,
+    pub new_count: usize,
+    pub today: usize,
+}
+pub(in super::super) fn calendar_model<'a>(
+    entries: &'a [WatchlistEntry],
+    schedules: &'a HashMap<String, Result<StreamSchedule, String>>,
     now: u64,
-    previous_visit: Option<u64>,
-) -> (String, Vec<CalendarSeen>) {
+) -> CalendarModel<'a> {
     let mut groups: [Vec<CalendarCard<'_>>; 8] = array::from_fn(|_| Vec::new());
     let mut seen = Vec::new();
     let mut new_count = 0usize;
-    let today = local::streaming_library::weekday(now);
     for entry in entries {
         match schedules.get(&entry.watch_url) {
             Some(Ok(schedule)) => {
@@ -570,6 +574,26 @@ pub(crate) fn render_calendar(
         group.sort_by_key(|card| card.title.to_lowercase());
     }
 
+    CalendarModel {
+        groups,
+        seen,
+        new_count,
+        today: weekday(now),
+    }
+}
+
+pub(crate) fn render_calendar(
+    entries: &[WatchlistEntry],
+    schedules: &HashMap<String, Result<StreamSchedule, String>>,
+    now: u64,
+    previous_visit: Option<u64>,
+) -> (String, Vec<CalendarSeen>) {
+    let CalendarModel {
+        groups,
+        seen,
+        new_count,
+        today,
+    } = calendar_model(entries, schedules, now);
     let names = [
         "Monday",
         "Tuesday",

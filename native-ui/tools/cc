@@ -1,0 +1,5 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Rust host build scripts and the Android cdylib both resolve "cc" through PATH.
+# Limit LLD concurrency for the intermittent Termux linker crashes.
+set -eu
+exec /data/data/com.termux/files/usr/bin/clang -Wl,--threads=1 "$@"

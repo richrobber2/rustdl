@@ -354,3 +354,22 @@ button { white-space: normal; }
 :root[data-reduce-motion="on"]::view-transition-group(*),
 :root[data-reduce-motion="on"]::view-transition-old(*),
 :root[data-reduce-motion="on"]::view-transition-new(*) { animation:none !important; }
+
+/* Inspection privacy uses opaque concealment, never a reversible blur. */
+html[data-inspection-privacy="on"] :is(img, video, canvas, iframe, .media-title, .media-file, .mini-player-title, .queue-mini-info strong, .file-block code, .files code, article[data-filename] code, .item .copy strong, .item .copy > span, .error, .notice, .player-shell header .copy, .player-toolbar > span, .gallery-search, .media-thumb::before, .media-thumb::after) {
+  visibility: hidden !important;
+}
+html[data-inspection-privacy="on"][data-privacy-page="gallery"] .library-head h2 {
+  visibility: hidden !important;
+}
+html[data-inspection-privacy="on"] .media-thumb {
+  background-image: none !important;
+  background-color: #171b25 !important;
+}
+/* Unknown pages are concealed until their fields have been audited. */
+html[data-inspection-privacy="on"][data-privacy-page="protected"] body {
+  visibility: hidden !important;
+}
+html[data-inspection-privacy="on"][data-privacy-page="protected"] body * {
+  visibility: hidden !important;
+}

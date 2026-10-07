@@ -34,8 +34,8 @@
   const saveFullscreenResume=target=>{try{sessionStorage.setItem(fullscreenResumeKey,JSON.stringify({path:new URL('/watch/'+encodeURIComponent(target),location.origin).pathname,at:Date.now()}))}catch(_error){}};
   const loadFullscreenResume=()=>{try{return safeParse(sessionStorage.getItem(fullscreenResumeKey))}catch(_error){return null}};
   const validQueuedFilename=name=>typeof name==='string'&&/^[A-Za-z0-9_-]+\.(?:mp4|m4a)$/.test(name);
-  const loadPlaybackQueue=()=>{try{const value=safeParse(localStorage.getItem(playbackQueueKey));if(!Array.isArray(value))return[];return[...new Set(value.filter(validQueuedFilename))].slice(0,200)}catch(_error){return[]}};
-  const savePlaybackQueue=queue=>{queue=[...new Set(queue.filter(validQueuedFilename))].slice(0,200);try{localStorage.setItem(playbackQueueKey,JSON.stringify(queue))}catch(_error){}return queue};
+  const loadPlaybackQueue=()=>{try{const legacy=localStorage.getItem(playbackQueueKey);if(bridge&&typeof bridge.getPlaybackQueue==='function'){if(typeof bridge.importPlaybackQueue==='function')bridge.importPlaybackQueue(legacy||'[]')}const value=safeParse(bridge&&typeof bridge.getPlaybackQueue==='function'?bridge.getPlaybackQueue():legacy);if(!Array.isArray(value))return[];return[...new Set(value.filter(validQueuedFilename))].slice(0,200)}catch(_error){return[]}};
+  const savePlaybackQueue=queue=>{queue=[...new Set(queue.filter(validQueuedFilename))].slice(0,200);try{localStorage.setItem(playbackQueueKey,JSON.stringify(queue))}catch(_error){}if(bridge&&typeof bridge.savePlaybackQueue==='function')bridge.savePlaybackQueue(JSON.stringify(queue));return queue};
   const enqueuePlayback=name=>{const queue=loadPlaybackQueue();if(queue.includes(name))return false;queue.push(name);savePlaybackQueue(queue);return true};
   const removeFromPlaybackQueue=name=>savePlaybackQueue(loadPlaybackQueue().filter(item=>item!==name));
   const fetchState=filename=>fetch('/__app/state.json'+(filename?'?file='+encodeURIComponent(filename):''),{cache:'no-store'}).then(response=>response.ok?response.json():Promise.reject()).catch(()=>null);

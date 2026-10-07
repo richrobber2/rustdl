@@ -14,6 +14,7 @@ public final class ScreenshotPreferencesProvider extends ContentProvider {
         Bundle result = new Bundle();
         result.putBoolean("allowed", "allowed".equals(method)
                 && getContext() != null && SettingsBridge.screenshotsAllowed(getContext()));
+        result.putBoolean("inspectionPrivacy", getContext() == null || SettingsBridge.inspectionPrivacyEnabled(getContext()));
         return result;
     }
 

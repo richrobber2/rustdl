@@ -107,11 +107,18 @@ pub(in super::super) fn respond_stream_manifest(
     watch_url: Option<&str>,
     episode: Option<&str>,
     refresh: bool,
+    native_token: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     let result = watch_url
         .ok_or_else(|| "missing AniWaves watch URL".into())
         .and_then(|watch_url| {
-            external::aniwaves::load_stream_manifest(client, watch_url, episode, refresh)
+            if let Some(token) = native_token.filter(|_| !refresh) {
+                local::native_streaming::manifest_for_decoder(token, watch_url, episode).ok_or_else(
+                    || "Streaming selection expired. Return to anime and refresh.".into(),
+                )
+            } else {
+                external::aniwaves::load_stream_manifest(client, watch_url, episode, refresh)
+            }
         });
     let (status, body) = match result {
         Ok(manifest) => {

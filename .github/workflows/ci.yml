@@ -8,6 +8,19 @@ permissions:
   contents: read
 
 jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Test the push guard
+        run: python3 tests/integration/test_changelog_guard.py
+      - name: Require release notes for changed content
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/check-changelog.py --range "$BASE" "$HEAD"
   rust:
     runs-on: ubuntu-latest
     steps:
@@ -17,8 +30,12 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Check formatting
-        run: cargo fmt --check
+        run: |
+          cargo fmt --check
+          cargo fmt --manifest-path native-ui/Cargo.toml --check
       - name: Test
         run: cargo test --release
+      - name: Test fixed native navigation destinations
+        run: python3 tests/integration/test_native_home.py
       - name: Test network policy in isolation
         run: cargo test --release native_network_policy -- --ignored --test-threads=1

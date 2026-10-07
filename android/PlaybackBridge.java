@@ -18,18 +18,94 @@ final class PlaybackBridge {
     private static final String UPDATED_PREFIX = "updated:";
     private static final String WATCHED_PREFIX = "watched:";
     private static final String RATE = "rate";
+    private static final String UP_NEXT = "up-next";
+    private static final String UP_NEXT_IMPORTED = "up-next-imported";
 
-    private final MainActivity activity;
+    private final java.lang.ref.WeakReference<MainActivity> activity;
     private final SharedPreferences preferences;
 
     PlaybackBridge(MainActivity activity) {
-        this.activity = activity;
-        preferences = activity.getSharedPreferences("playback", Context.MODE_PRIVATE);
+        this((Context)activity,activity);
+    }
+
+    PlaybackBridge(Context context) {this(context,null);}
+
+    private PlaybackBridge(Context context,MainActivity ui) {
+        this.activity = new java.lang.ref.WeakReference<>(ui);
+        preferences = context.getApplicationContext().getSharedPreferences("playback", Context.MODE_PRIVATE);
+    }
+
+    private MainActivity liveActivity() {
+        MainActivity current=activity.get();
+        return current!=null&&!current.isDestroyed()?current:null;
+    }
+
+    @JavascriptInterface
+    public synchronized String getPlaybackQueue() {
+        return preferences.getString(UP_NEXT, "[]");
+    }
+
+    @JavascriptInterface
+    public synchronized void importPlaybackQueue(String legacy) {
+        if (preferences.getBoolean(UP_NEXT_IMPORTED, false)) return;
+        java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
+        appendQueue(merged, getPlaybackQueue());
+        appendQueue(merged, legacy);
+        preferences.edit().putString(UP_NEXT, new JSONArray(merged).toString())
+                .putBoolean(UP_NEXT_IMPORTED, true).apply();
+    }
+
+    @JavascriptInterface
+    public synchronized void savePlaybackQueue(String data) {
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+        appendQueue(names, data);
+        preferences.edit().putString(UP_NEXT, new JSONArray(names).toString()).apply();
+    }
+
+    synchronized void changeQueued(String filename, boolean add) {
+        if (!valid(filename)) return;
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+        appendQueue(names, getPlaybackQueue());
+        if (add && names.size() < 200) names.add(filename);
+        if (!add) names.remove(filename);
+        preferences.edit().putString(UP_NEXT, new JSONArray(names).toString()).apply();
+    }
+
+    synchronized int queuedCount(String current) {
+        java.util.LinkedHashSet<String> names=new java.util.LinkedHashSet<>();
+        appendQueue(names,getPlaybackQueue());names.remove(current);return names.size();
+    }
+
+    synchronized String nextQueued(String current) {
+        java.util.LinkedHashSet<String> names=new java.util.LinkedHashSet<>();
+        appendQueue(names,getPlaybackQueue());
+        for(String name:names) if(!name.equals(current)) return name;
+        return "";
+    }
+
+    private static void appendQueue(java.util.LinkedHashSet<String> target, String data) {
+        try {
+            JSONArray items = new JSONArray(data == null ? "[]" : data);
+            for (int i = 0; i < items.length() && target.size() < 200; i++) {
+                String name = items.optString(i);
+                if (valid(name)) target.add(name);
+            }
+        } catch (Exception invalid) {
+            // Malformed legacy state must not replace the validated native queue.
+        }
     }
 
     @JavascriptInterface
     public double getPosition(String filename) {
         return valid(filename) ? preferences.getFloat(POSITION_PREFIX + filename, 0f) : 0d;
+    }
+
+    double getDuration(String filename) {
+        return valid(filename) ? preferences.getFloat(DURATION_PREFIX + filename, 0f) : 0d;
+    }
+
+    boolean isWatched(String filename) {
+        return valid(filename) && preferences.getBoolean(WATCHED_PREFIX + filename, false);
     }
 
     @JavascriptInterface
@@ -89,7 +165,8 @@ final class PlaybackBridge {
     @JavascriptInterface
     public void shareVideo(String filename) {
         if (valid(filename)) {
-            activity.sharePublishedDownload(filename);
+            MainActivity current=liveActivity();
+            if(current!=null) current.sharePublishedDownload(filename);
         }
     }
 
@@ -111,6 +188,7 @@ final class PlaybackBridge {
 
     void forget(String filename) {
         if (!valid(filename)) return;
+        changeQueued(filename, false);
         preferences.edit()
                 .remove(POSITION_PREFIX + filename)
                 .remove(DURATION_PREFIX + filename)
@@ -151,22 +229,26 @@ final class PlaybackBridge {
 
     @JavascriptInterface
     public boolean supportsPictureInPicture() {
-        return activity.supportsPictureInPicture();
+        MainActivity current=liveActivity();
+        return current!=null&&current.supportsPictureInPicture();
     }
 
     @JavascriptInterface
     public void enterPictureInPicture(int width, int height) {
-        activity.requestPictureInPicture(width, height);
+        MainActivity current=liveActivity();
+        if(current!=null) current.requestPictureInPicture(width, height);
     }
 
     @JavascriptInterface
     public void setRotationLocked(boolean locked) {
-        activity.setPlaybackRotationLocked(locked);
+        MainActivity current=liveActivity();
+        if(current!=null) current.setPlaybackRotationLocked(locked);
     }
 
     @JavascriptInterface
     public void setPlaybackState(boolean playing, int width, int height) {
-        activity.setPlaybackActive(playing, width, height);
+        MainActivity current=liveActivity();
+        if(current!=null) current.setPlaybackActive(playing, width, height);
     }
 
     private static boolean valid(String filename) {

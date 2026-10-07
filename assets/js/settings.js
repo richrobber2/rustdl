@@ -5,6 +5,7 @@
       const folder = document.querySelector('#download-folder');
       const destination = document.querySelector('#destination');
       const screenshots = document.querySelector('#allow-screenshots');
+      const privacy = document.querySelector('#inspection-privacy');
       const keepAwake = document.querySelector('#keep-awake');
       const appearance = document.querySelector('#appearance');
       const background = document.querySelector('#background-theme');
@@ -21,6 +22,7 @@
         destination.textContent = result.downloadPath || `Downloads/${folder.value}`;
         keepAwake.checked = result.keepScreenAwake !== false;
         screenshots.checked = result.allowScreenshots === true;
+        privacy.checked = result.inspectionPrivacy !== false;
         refresh.value = String(result.diagnosticsRefreshSeconds || 5);
         appearance.value = result.appearance || 'system';
         background.value = result.backgroundTheme || 'space';
@@ -44,7 +46,7 @@
         event.preventDefault();
         if (!bridge) return;
         save.disabled = true;
-        call(() => bridge.save(folder.value, keepAwake.checked, Number(refresh.value), appearance.value, spaceEffect.checked, background.value, screenshots.checked, reduceMotion.checked, mobileDownloads.value));
+        call(() => bridge.save(folder.value, keepAwake.checked, Number(refresh.value), appearance.value, spaceEffect.checked, background.value, screenshots.checked, reduceMotion.checked, mobileDownloads.value, privacy.checked));
         save.disabled = false;
       });
       reset.addEventListener('click', () => { if (bridge) call(() => bridge.reset()); });

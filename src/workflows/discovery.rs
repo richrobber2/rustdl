@@ -74,10 +74,7 @@ pub(in super::super) fn discover_videos(
     Ok(candidates)
 }
 
-pub(in super::super) fn respond_playlist_quality_page(
-    request: Request,
-    picks: &[String],
-) -> Result<(), Box<dyn Error>> {
+pub(in super::super) fn prepare_playlist_picks(picks: &[String]) -> Result<String, String> {
     let sessions = PLAYLIST_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()));
     let sessions = sessions
         .lock()
@@ -111,9 +108,17 @@ pub(in super::super) fn respond_playlist_quality_page(
     }
     drop(sessions);
     if selected.is_empty() {
-        return local::html::respond_text(request, 400, "Select at least one playlist video");
+        return Err("Select at least one playlist video".to_owned());
     }
-    match workflows::playlist_resolution::start(selected) {
+    selected.sort_by_key(|(_, membership)| (membership.playlist_id.clone(), membership.position));
+    workflows::playlist_resolution::start(selected)
+}
+
+pub(in super::super) fn respond_playlist_quality_page(
+    request: Request,
+    picks: &[String],
+) -> Result<(), Box<dyn Error>> {
+    match prepare_playlist_picks(picks) {
         Ok(token) => {
             request.respond(
                 Response::empty(StatusCode(303)).with_header(local::html::header(
@@ -123,7 +128,15 @@ pub(in super::super) fn respond_playlist_quality_page(
             )?;
             Ok(())
         }
-        Err(error) => local::html::respond_text(request, 429, &error),
+        Err(error) => local::html::respond_text(
+            request,
+            if error == "Select at least one playlist video" {
+                400
+            } else {
+                429
+            },
+            &error,
+        ),
     }
 }
 
@@ -176,18 +189,14 @@ pub(in super::super) fn respond_discovery_page(
     Ok(())
 }
 
-pub(in super::super) fn respond_discovery_import(
-    request: Request,
-    client: &Client,
-    output_dir: &Path,
+type SelectedDownload = (String, ResolvedVideo, Option<PlaylistMembership>);
+
+fn selected_downloads(
     picks: &[String],
-) -> Result<(), Box<dyn Error>> {
+    sessions: &HashMap<String, local::discovery::DiscoverySession>,
+) -> Vec<SelectedDownload> {
     let mut selected = Vec::new();
     let mut seen = HashSet::new();
-    let sessions = DISCOVERY_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()));
-    let sessions = sessions
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     for pick in picks {
         let mut parts = pick.split(':');
         let (Some(token), Some(index), Some(quality_index)) =
@@ -218,10 +227,28 @@ pub(in super::super) fn respond_discovery_import(
             ));
         }
     }
-    drop(sessions);
-    if selected.is_empty() {
-        return local::html::respond_text(request, 400, "Select at least one video");
-    }
+    selected
+}
+
+/// Shared import outcome, independent of HTML and HTTP request ownership.
+pub(in super::super) struct ImportOutcome {
+    pub(in super::super) selected: usize,
+    pub(in super::super) errors: Vec<String>,
+}
+
+pub(in super::super) fn import_discovery_picks(
+    client: &Client,
+    output_dir: &Path,
+    picks: &[String],
+) -> ImportOutcome {
+    let selected = {
+        let sessions = DISCOVERY_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()));
+        let sessions = sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        selected_downloads(picks, &sessions)
+    };
+    let count = selected.len();
     let mut errors = Vec::new();
     for (source_url, resolved, membership) in selected {
         let filename = resolved.filename();
@@ -237,13 +264,87 @@ pub(in super::super) fn respond_discovery_import(
                         output_dir, &filename, membership,
                     )
                 {
-                    errors.push(local::html::escape_html(&format!(
+                    errors.push(format!(
                         "Could not group {filename} into its playlist: {error}"
-                    )));
+                    ));
                 }
             }
-            Err(error) => errors.push(local::html::escape_html(&error.to_string())),
+            Err(error) => errors.push(error.to_string()),
         }
     }
+    ImportOutcome {
+        selected: count,
+        errors,
+    }
+}
+
+pub(in super::super) fn respond_discovery_import(
+    request: Request,
+    client: &Client,
+    output_dir: &Path,
+    picks: &[String],
+) -> Result<(), Box<dyn Error>> {
+    let outcome = import_discovery_picks(client, output_dir, picks);
+    if outcome.selected == 0 {
+        return local::html::respond_text(request, 400, "Select at least one video");
+    }
+    let errors = outcome
+        .errors
+        .iter()
+        .map(|error| local::html::escape_html(error))
+        .collect::<Vec<_>>();
     local::queue::respond_queue_page(request, &errors)
+}
+
+#[cfg(test)]
+mod native_import_tests {
+    use super::*;
+    #[test]
+    fn native_import_selection_preserves_quality_and_membership_and_deduplicates() {
+        let quality = ResolvedVideo {
+            filename: "123-1.mp4".into(),
+            media_url: "https://example.invalid/synthetic".into(),
+            audio_url: None,
+            extract_audio: false,
+            quality_label: Some("720p".into()),
+            quality_height: Some(720),
+        };
+        let membership = PlaylistMembership {
+            playlist_id: "PLsynthetic".into(),
+            title: "Synthetic collection".into(),
+            position: 2,
+            total: 3,
+        };
+        let candidate = DiscoveryCandidate {
+            resolved: quality.clone(),
+            qualities: vec![quality],
+            source_url: "https://example.invalid/source".into(),
+            author: "Synthetic".into(),
+            text: "Synthetic candidate".into(),
+            playlist: Some(membership),
+        };
+        let sessions = HashMap::from([(
+            "opaque".into(),
+            local::discovery::DiscoverySession {
+                created: 0,
+                candidates: vec![candidate],
+            },
+        )]);
+        let picks = [
+            "missing:0:0",
+            "opaque:99:0",
+            "opaque:0:99",
+            "malformed",
+            "opaque:0:0",
+            "opaque:0:0",
+        ]
+        .map(str::to_owned);
+        let selected = selected_downloads(&picks, &sessions);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].1.quality_height, Some(720));
+        let membership = selected[0].2.as_ref().unwrap();
+        assert_eq!(membership.position, 2);
+        assert_eq!(membership.total, 3);
+        assert!(selected_downloads(&[], &sessions).is_empty());
+    }
 }

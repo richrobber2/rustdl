@@ -1,4 +1,5 @@
 /target
+/native-ui/target
 *.part
 *.mp4
 /android/debug.keystore

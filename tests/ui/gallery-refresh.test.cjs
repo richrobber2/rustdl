@@ -193,3 +193,24 @@ test('refresh recovers automatically after more than three failures',async t=>{
   f.setResponse(null);f.setNext([item(2)]);await timer.advance(12000);
   assert.equal(f.requests.length,5);assert.equal(f.cards()[0].querySelector('a').getAttribute('href'),item(2).href);
 });
+
+
+test('Up Next imports legacy state into the Android bridge and saves menu changes to both stores', t=>{
+  let nativeQueue=['123-1.m4a'];let imported=[];let saved=[];
+  const entry={...item(1),href:'/watch/123-1.m4a',filename:'123-1.m4a'};
+  const f=fixture([entry], '/', w=>{
+    w.localStorage.setItem('rustdl:up-next:v1', JSON.stringify(['123-1.m4a']));
+    w.RustDLPlayback={getContinueWatching:()=> '[]',
+      importPlaybackQueue:value=>imported.push(JSON.parse(value)),
+      getPlaybackQueue:()=>JSON.stringify(nativeQueue),
+      savePlaybackQueue:value=>{nativeQueue=JSON.parse(value);saved.push(nativeQueue)}};
+  });
+  t.after(()=>f.dom.window.close());
+  assert.deepEqual(imported[0], ['123-1.m4a']);
+  f.w.document.querySelector('.card-menu-button').click();
+  const button=f.w.document.querySelector('[data-card-action="queue"]');
+  assert.equal(button.textContent, 'Remove from Up Next');
+  button.click();
+  assert.deepEqual(saved.at(-1), []);
+  assert.deepEqual(JSON.parse(f.w.localStorage.getItem('rustdl:up-next:v1')), []);
+});

@@ -1,0 +1,17 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""Compile the mobile backend from RustDL's owned, pinned-source build copy."""
+import json, os, pathlib, sys
+compiler, args = sys.argv[1], sys.argv[2:]
+maps = json.loads(pathlib.Path(os.environ["RUSTDL_NATIVE_RUSTC_STAGE_MAP"]).read_text())
+crate = args[args.index("--crate-name") + 1] if "--crate-name" in args else ""
+if crate in maps:
+    mapping = maps[crate]
+    original = pathlib.Path(mapping["original"]).resolve()
+    matched = [index for index,value in enumerate(args) if value.endswith(".rs") and pathlib.Path(value).resolve() == original]
+    if len(matched) != 1:
+        raise RuntimeError("Pinned mobile compiler source did not match staging map")
+    args[matched[0]] = mapping["owned"]
+parent = os.environ.get("RUSTDL_NATIVE_PARENT_RUSTC_WRAPPER")
+if parent:
+    os.execvp(parent, [parent, compiler, *args])
+os.execvp(compiler, [compiler, *args])

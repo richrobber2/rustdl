@@ -45,6 +45,7 @@
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
         </activity>
+        <activity android:name="app.rustdl.NativeVisualActivity" android:launchMode="singleTask" android:exported="true" android:excludeFromRecents="true" android:process=":native_visual" android:taskAffinity="app.rustdl.native_visual" />
         <activity
             android:name="app.rustdl.StreamingActivity"
             android:configChanges="keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
@@ -90,7 +91,9 @@
                 <data android:mimeType="text/*" />
             </intent-filter>
         </activity>
+        <provider android:name="app.rustdl.NativeVisualStatusProvider" android:authorities="app.rustdl.visual-review" android:exported="true" android:permission="android.permission.DUMP" android:process=":native_visual" />
         <provider android:name="app.rustdl.ScreenshotPreferencesProvider"
             android:authorities="app.rustdl.preferences" android:exported="false" />
+        <receiver android:name="app.rustdl.NativePipReceiver" android:exported="false" />
     </application>
 </manifest>

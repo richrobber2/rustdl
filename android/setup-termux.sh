@@ -8,6 +8,8 @@ PLATFORM_COMMIT=1e98db1a199e8f7f85541af26bfc27019501b132
 PLATFORM_SHA256=4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b
 PLATFORM_URL="https://raw.githubusercontent.com/Sable/android-platforms/$PLATFORM_COMMIT/android-35/android.jar"
 CHECK_ONLY=false
+NATIVE_UI=${RUSTDL_NATIVE_UI:-1}
+case "$NATIVE_UI" in 0|1) ;; *) echo "RUSTDL_NATIVE_UI must be 0 or 1" >&2; exit 2 ;; esac
 
 if [ "${1:-}" = "--check" ]; then
     CHECK_ONLY=true
@@ -34,6 +36,11 @@ if [ "$CHECK_ONLY" = false ]; then
     command -v apksigner >/dev/null 2>&1 || packages="$packages apksigner"
     command -v make >/dev/null 2>&1 || packages="$packages make"
     command -v curl >/dev/null 2>&1 || packages="$packages curl"
+    if [ "$NATIVE_UI" = 1 ]; then
+        command -v clang >/dev/null 2>&1 || packages="$packages clang"
+        command -v patchelf >/dev/null 2>&1 || packages="$packages patchelf"
+        command -v python3 >/dev/null 2>&1 || packages="$packages python"
+    fi
     if [ -n "$packages" ]; then
         # Intentionally word-split the package list into pkg arguments.
         pkg install -y $packages
@@ -47,6 +54,14 @@ for tool in cargo javac d8 aapt2 jar keytool apksigner make curl sha256sum; do
         missing=true
     fi
 done
+if [ "$NATIVE_UI" = 1 ]; then
+    for tool in clang clang++ llvm-ar llvm-strip llvm-readelf patchelf python3; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "Missing native UI build tool: $tool" >&2
+            missing=true
+        fi
+    done
+fi
 if [ "$missing" = true ]; then
     echo "Run 'make setup' to install the Termux build prerequisites." >&2
     exit 1

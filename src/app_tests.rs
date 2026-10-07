@@ -638,10 +638,7 @@ fn changelog_covers_every_version_and_marks_the_current_release() {
         html.matches(r#"<option value="version-"#).count(),
         CHANGELOG.len()
     );
-    assert_eq!(
-        html.matches(r#"<article id="version-"#).count(),
-        CHANGELOG.len()
-    );
+    assert_eq!(html.matches(r#"<article id="version-"#).count(), 5);
     assert!(html.contains(r#"id="version-jump""#));
     assert!(html.contains(r#"id="version-go""#));
     assert!(html.contains("scrollIntoView"));
@@ -650,15 +647,16 @@ fn changelog_covers_every_version_and_marks_the_current_release() {
         html.matches(r#"class="release-actions""#).count(),
         CHANGELOG
             .iter()
+            .take(5)
             .filter(|(version, _)| !local::pages::changelog::destinations(version).is_empty())
             .count()
     );
-    assert!(html.contains("Go to Settings"));
-    assert!(html.contains("Go to Diagnostics"));
+    assert!(html.contains("Go to Inspection privacy"));
+    assert!(html.contains("Go to Release history"));
     assert!(!html.contains(r#"href="/control"#));
-    assert!(html.contains(r#"href="/peers""#));
-    assert!(html.contains(r#"href="/queue""#));
-    assert!(html.contains(r#"href="rustdl://mode/inspection""#));
+    assert!(!html.contains(r#"<article id="version-0-1-0""#));
+    assert!(html.contains(r#"id="load-releases""#));
+    assert!(html.contains("/__app/changelog.json?"));
     assert!(INDEX_HTML.contains(r#"id="downloader""#));
 }
 

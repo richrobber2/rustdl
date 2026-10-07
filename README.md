@@ -23,12 +23,12 @@ make apk
 API-35 `android.jar` only after verifying its SHA-256 digest. `make apk` checks every
 prerequisite, builds the optimized ARM64 Rust library, compiles the Android wrapper,
 creates a local debug signing key when needed, signs the APK, and verifies its
-signature. The result is `target/android-termux/rustdl.apk`.
+signature. The result is `target/android-termux-gpui/rustdl.apk`.
 
 Install it with Android's package installer or with ADB:
 
 ```sh
-adb install -r target/android-termux/rustdl.apk
+adb install -r target/android-termux-gpui/rustdl.apk
 ```
 
 If the original signing key was lost, build a separate installation with:
@@ -37,14 +37,15 @@ If the original signing key was lost, build a separate installation with:
 RUSTDL_VARIANT=alongside make apk
 ```
 
-This produces `target/android-termux-alongside/rustdl.apk`, labeled **RustDL Next**
+This produces `target/android-termux-alongside-gpui/rustdl.apk`, labeled **RustDL Next**
 with package ID `app.rustdl.next`. It uses separate app data, local ports 37758/37759
 (and peer port 37760), and `Downloads/RustDL Next`. The existing app remains installed;
 its private library and settings are not migrated. Keep `android/debug.keystore`
 backed up outside Termux so future builds can update this installation.
 
-The app embeds the Rust server in a native library and displays its UI in a secured
-localhost WebView. Paste a link normally, or use **Share → Download with RustDL**
+The app embeds the Rust server in a native library and renders its interface with
+GPUI Kit. Restricted provider decoding and initialization/accessibility fallbacks
+retain WebView support while validation is incomplete. Paste a link normally, or use **Share → Download with RustDL**
 from X, YouTube, or Snapchat to begin a download immediately. Android's MediaStore publishes completed files to
 `Downloads/RustDL` without broad storage permissions; an app-private copy backs the
 built-in player and duplicate cache.
@@ -154,6 +155,15 @@ Screenshots are blocked by default. Enable **Settings → Allow screenshots** an
 save to permit screenshots, screen recording, and app previews. This applies to
 the main app and anime player; restoring defaults blocks screenshots again.
 
+**Inspection privacy** defaults to on. When screenshots are allowed, it conceals
+thumbnails, titles/filenames, and video frames on the main app's screen before
+capture, while retaining navigation, app controls, and progress. It also conceals
+unaudited pages entirely. Fullscreen screenshots and entering picture-in-picture
+are blocked in this mode. This is an on-screen privacy curtain, so the same fields
+are hidden from the phone user while screenshots are allowed. Disable screenshots
+for normal private viewing. Agents must keep Inspection privacy enabled and use
+synthetic inspection pages whenever possible; see [AGENTS.md](AGENTS.md).
+
 Choose **Settings → Background theme → Rainy City**, then **Save settings**, for
 the optional city background with subtle parallax while scrolling. Reduced motion
 keeps it still. Light mode uses the matching daylight artwork;
@@ -176,6 +186,18 @@ Save titles from the catalog or player to the persistent **Watchlist**, then ope
 compare episode information with the previous successful calendar check. Use
 **Refresh schedules** to request fresh information; unavailable schedules are shown
 separately. Release timestamps display in the phone's timezone.
+
+### Changelog and push guard
+
+The changelog initially renders five releases and loads older notes in batches of
+eight near the end of the page or through **Load older versions**. Version navigation
+and bookmarked version links fetch the selected release directly.
+
+Run `make hooks` after cloning to enable the changelog pre-push guard. Every pushed
+range that changes tracked content must add concrete notes to `CHANGELOG` in
+`src/local/pages/changelog.rs`; uncommitted notes do not count. CI repeats this check
+for pushes and pull requests. The local guard is enabled in this checkout. Agents
+must not bypass it; see [AGENTS.md](AGENTS.md).
 
 ### Activity and settings
 
@@ -474,3 +496,14 @@ It renders discovered synthetic screen fixtures in the real WebView and prints
 `PASS`, `FAIL`, `SCROLL`, and `MISSING` coverage lines to the terminal. New/changed
 UI sources and an outdated installed APK stop the run instead of testing stale
 code. Normal APKs exclude the visual benchmark activity and assets.
+
+## GPUI Android interface
+
+Run `make native-setup`, then `make native-apk` to build RustDL Next with GPUI
+navigation, library, settings, queue, discovery, anime, transfers, storage,
+diagnostics, updates and playback controls. The Rust engine and Android services
+remain shared. Provider WebView content is retained as a restricted streaming
+decoder, with native controls; initialization and TalkBack fallbacks remain
+while validation is incomplete. See [native-ui/README.md](native-ui/README.md)
+for pinned versions, scope and validation limits. The normal `make apk` build now uses GPUI; `make legacy-apk` explicitly builds
+the compatibility WebView interface. Device validation is still outstanding.

@@ -69,6 +69,8 @@ final class UpdateManager {
     private Button updateButton;
     private boolean waitingForInstallPermission;
     private boolean destroyed;
+    private boolean nativePresentation;
+    private final java.util.concurrent.atomic.AtomicBoolean checking=new java.util.concurrent.atomic.AtomicBoolean();
 
     UpdateManager(Activity activity, FrameLayout root, String manifestUrl) {
         this.activity = activity;
@@ -93,12 +95,26 @@ final class UpdateManager {
         }
     }
 
-    void start() {
-        if (!isHttps(manifestUrl)) {
+    void start() { check(false); }
+
+    void checkNow() { check(true); }
+
+    void installReadyUpdate() {
+        if (!destroyed && !checking.get() && !"installing".equals(activityState) && !"installed".equals(activityState)) requestInstall();
+    }
+
+    void setNativePresentation(boolean nativeUi) {
+        nativePresentation=nativeUi;
+        if (updateBanner!=null) updateBanner.setVisibility(nativeUi?android.view.View.GONE:android.view.View.VISIBLE);
+    }
+
+    private void check(boolean force) {
+        if (destroyed || !isHttps(manifestUrl) || "installing".equals(activityState) || !checking.compareAndSet(false,true)) {
             return;
         }
         long now = System.currentTimeMillis();
-        if (now - preferences.getLong(LAST_CHECK, 0L) < CHECK_INTERVAL_MS) {
+        if (!force && now - preferences.getLong(LAST_CHECK, 0L) < CHECK_INTERVAL_MS) {
+            checking.set(false);
             setActivityState("idle", "Checked recently");
             return;
         }
@@ -118,6 +134,9 @@ final class UpdateManager {
                 mainHandler.post(() -> showReadyUpdate(new ReadyUpdate(release, apk)));
             } catch (Exception error) {
                 setActivityState("error", "Update check could not finish");
+            } finally {
+                checking.set(false);
+                setActivityState(activityState,activityDetail);
             }
         });
     }
@@ -290,6 +309,7 @@ final class UpdateManager {
         background.setCornerRadius(dp(18));
         updateBanner.setBackground(background);
         updateBanner.setElevation(dp(10));
+        updateBanner.setVisibility(nativePresentation?android.view.View.GONE:android.view.View.VISIBLE);
 
         TextView message = new TextView(activity);
         message.setText("RustDL " + update.release.versionName + " is ready");
@@ -504,6 +524,8 @@ final class UpdateManager {
             status.put("state", activityState);
             status.put("detail", activityDetail);
             status.put("configured", isHttps(manifestUrl));
+            status.put("canCheck",isHttps(manifestUrl)&&!checking.get()&&!"installing".equals(activityState));
+            status.put("canInstall",readyUpdate!=null&&!checking.get()&&!"installing".equals(activityState)&&!"installed".equals(activityState));
             if (readyUpdate != null) {
                 status.put("version", readyUpdate.release.versionName);
             }

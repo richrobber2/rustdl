@@ -89,10 +89,7 @@ pub(in super::super) fn respond_gallery_metrics(request: Request) -> Result<(), 
     Ok(())
 }
 
-pub(in super::super) fn respond_playback_order(
-    request: Request,
-    output_dir: &Path,
-) -> Result<(), Box<dyn Error>> {
+pub(in super::super) fn playback_order(output_dir: &Path) -> Result<Vec<String>, Box<dyn Error>> {
     let ready = local::gallery::load_gallery_filenames(output_dir)?;
     let ready_set = ready.iter().cloned().collect::<HashSet<_>>();
     let mut active = local::queue::download_jobs()
@@ -115,6 +112,14 @@ pub(in super::super) fn respond_playback_order(
         .collect::<Vec<_>>();
     active.sort_unstable_by(|left, right| right.cmp(left));
     active.extend(ready);
+    Ok(active)
+}
+
+pub(in super::super) fn respond_playback_order(
+    request: Request,
+    output_dir: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let active = playback_order(output_dir)?;
     let response = Response::from_string(serde_json::json!({ "items": active }).to_string())
         .with_status_code(StatusCode(200))
         .with_header(local::html::header(

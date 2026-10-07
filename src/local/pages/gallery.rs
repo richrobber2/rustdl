@@ -81,11 +81,20 @@ pub(in super::super::super) fn render_entry(entry: &GalleryEntry, index: usize) 
     }
 }
 
-pub(in super::super::super) fn render_playlist(
+#[derive(Clone, Debug)]
+pub(in super::super::super) struct GalleryModel {
+    pub(in super::super::super) entries: Vec<GalleryEntry>,
+    pub(in super::super::super) library_title: String,
+    pub(in super::super::super) library_summary: String,
+    pub(in super::super::super) collection_nav: String,
+    pub(in super::super::super) item_count: usize,
+}
+
+/// Shared typed library data for native and web renderers; never parses HTML.
+pub(in super::super::super) fn model(
     output_dir: &Path,
     selected_playlist: Option<&str>,
-) -> io::Result<String> {
-    let render_started = Instant::now();
+) -> io::Result<GalleryModel> {
     let mut filenames = if local::runtime::inspection_mode() {
         Vec::new()
     } else {
@@ -225,53 +234,74 @@ pub(in super::super::super) fn render_playlist(
             format!("{item_count} media · {folder_count} folders")
         };
     }
+    let mut gallery_entries = folder_entries;
+    gallery_entries.extend(active.iter().map(|filename| GalleryEntry {
+        href: format!("/watch/{filename}"),
+        filename: Some(filename.clone()),
+        state: "Downloading".to_owned(),
+        title: "Stream while saving".to_owned(),
+        subtitle: filename.clone(),
+        search_text: format!("stream while saving {filename}").to_lowercase(),
+        kind: if local::media::is_audio_filename(filename) {
+            "downloading-audio".to_owned()
+        } else {
+            "downloading".to_owned()
+        },
+        thumbnail: None,
+        transition_name: Some(local::web_assets::view_transition_name(filename)),
+    }));
+    gallery_entries.extend(filenames.iter().map(|filename| {
+        let audio = local::media::is_audio_filename(filename);
+        GalleryEntry {
+            href: format!("/watch/{filename}"),
+            filename: Some(filename.clone()),
+            state: "Ready".to_owned(),
+            title: if audio {
+                "Open audio player"
+            } else {
+                "Open player"
+            }
+            .to_owned(),
+            subtitle: filename.clone(),
+            search_text: format!(
+                "{} {}",
+                if audio {
+                    "open audio player"
+                } else {
+                    "open player"
+                },
+                filename
+            )
+            .to_lowercase(),
+            kind: if audio { "audio" } else { "video" }.to_owned(),
+            thumbnail: (!audio).then(|| filename.clone()),
+            transition_name: Some(local::web_assets::view_transition_name(filename)),
+        }
+    }));
+    Ok(GalleryModel {
+        entries: gallery_entries,
+        library_title,
+        library_summary,
+        collection_nav,
+        item_count,
+    })
+}
+
+pub(in super::super::super) fn render_playlist(
+    output_dir: &Path,
+    selected_playlist: Option<&str>,
+) -> io::Result<String> {
+    let render_started = Instant::now();
+    let GalleryModel {
+        entries: gallery_entries,
+        library_title,
+        library_summary,
+        collection_nav,
+        item_count,
+    } = model(output_dir, selected_playlist)?;
     let library = if local::runtime::inspection_mode() {
         format!(include_str!("../../../assets/html/gallery-inspection.html"),).to_owned()
     } else {
-        let mut gallery_entries = folder_entries;
-        gallery_entries.extend(active.iter().map(|filename| GalleryEntry {
-            href: format!("/watch/{filename}"),
-            filename: Some(filename.clone()),
-            state: "Downloading".to_owned(),
-            title: "Stream while saving".to_owned(),
-            subtitle: filename.clone(),
-            search_text: format!("stream while saving {filename}").to_lowercase(),
-            kind: if local::media::is_audio_filename(filename) {
-                "downloading-audio".to_owned()
-            } else {
-                "downloading".to_owned()
-            },
-            thumbnail: None,
-            transition_name: Some(local::web_assets::view_transition_name(filename)),
-        }));
-        gallery_entries.extend(filenames.iter().map(|filename| {
-            let audio = local::media::is_audio_filename(filename);
-            GalleryEntry {
-                href: format!("/watch/{filename}"),
-                filename: Some(filename.clone()),
-                state: "Ready".to_owned(),
-                title: if audio {
-                    "Open audio player"
-                } else {
-                    "Open player"
-                }
-                .to_owned(),
-                subtitle: filename.clone(),
-                search_text: format!(
-                    "{} {}",
-                    if audio {
-                        "open audio player"
-                    } else {
-                        "open player"
-                    },
-                    filename
-                )
-                .to_lowercase(),
-                kind: if audio { "audio" } else { "video" }.to_owned(),
-                thumbnail: (!audio).then(|| filename.clone()),
-                transition_name: Some(local::web_assets::view_transition_name(filename)),
-            }
-        }));
         let initial_cards = gallery_entries
             .iter()
             .take(GALLERY_INITIAL_ITEMS)

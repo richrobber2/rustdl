@@ -19,6 +19,7 @@ final class SettingsBridge {
     private static final String DIAGNOSTICS_REFRESH_SECONDS = "diagnostics-refresh-seconds";
     private static final String APPEARANCE = "appearance";
     private static final String ALLOW_SCREENSHOTS = "allow-screenshots";
+    private static final String INSPECTION_PRIVACY = "inspection-privacy";
     private static final String BACKGROUND_THEME = "background-theme";
     private static final String REDUCE_MOTION = "reduce-motion";
     private static final String SPACE_EFFECT = "space-effect";
@@ -39,7 +40,7 @@ final class SettingsBridge {
 
     @JavascriptInterface
     public String save(String requestedFolder, boolean keepAwake, int refreshSeconds,
-            String requestedAppearance, boolean spaceEffect, String requestedBackground, boolean allowScreenshots, boolean reduceMotion, String mobilePolicy) {
+            String requestedAppearance, boolean spaceEffect, String requestedBackground, boolean allowScreenshots, boolean reduceMotion, String mobilePolicy, boolean inspectionPrivacy) {
         if (!"allow".equals(mobilePolicy) && !"ask".equals(mobilePolicy) && !"block".equals(mobilePolicy)) {
             return response(false, "Choose a supported mobile-data download policy");
         }
@@ -66,6 +67,7 @@ final class SettingsBridge {
                 .putString(BACKGROUND_THEME, requestedBackground)
                 .putBoolean(SPACE_EFFECT, spaceEffect)
                 .putBoolean(ALLOW_SCREENSHOTS, allowScreenshots)
+                .putBoolean(INSPECTION_PRIVACY, inspectionPrivacy)
                 .putBoolean(REDUCE_MOTION, reduceMotion)
                 .putString(MOBILE_DOWNLOAD_POLICY, mobilePolicy)
                 .commit();
@@ -89,6 +91,7 @@ final class SettingsBridge {
                 .remove(BACKGROUND_THEME)
                 .remove(SPACE_EFFECT)
                 .remove(ALLOW_SCREENSHOTS)
+                .remove(INSPECTION_PRIVACY)
                 .remove(REDUCE_MOTION)
                 .remove(MOBILE_DOWNLOAD_POLICY)
                 .commit();
@@ -163,6 +166,20 @@ final class SettingsBridge {
                 .getBoolean(ALLOW_SCREENSHOTS, false);
     }
 
+    static boolean inspectionPrivacyEnabled(Context context) {
+        return context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getBoolean(INSPECTION_PRIVACY, true);
+    }
+
+    @JavascriptInterface
+    public boolean inspectionPrivacyEnabled() {
+        return preferences.getBoolean(INSPECTION_PRIVACY, true);
+    }
+
+    @JavascriptInterface
+    public boolean screenshotRedactionEnabled() {
+        return screenshotsAllowed(activity) && inspectionPrivacyEnabled();
+    }
+
     boolean keepScreenAwake() {
         return preferences.getBoolean(KEEP_SCREEN_AWAKE, true);
     }
@@ -186,6 +203,7 @@ final class SettingsBridge {
             result.put("downloadPath", "Downloads/" + downloadFolder());
             result.put("keepScreenAwake", keepScreenAwake());
             result.put("allowScreenshots", screenshotsAllowed(activity));
+            result.put("inspectionPrivacy", inspectionPrivacyEnabled());
             result.put("diagnosticsRefreshSeconds", diagnosticsRefreshSeconds());
             result.put("appearance", appearance());
             result.put("backgroundTheme", backgroundTheme());

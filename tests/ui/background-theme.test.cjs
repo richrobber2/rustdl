@@ -13,11 +13,25 @@ function page(initial={}) {
   const response=()=>JSON.stringify({ok:true,downloadFolder:'RustDL',diagnosticsRefreshSeconds:5,...saved});
   w.RustDLSettings={appearance:()=>saved.appearance,spaceEffectEnabled:()=>saved.spaceEffectEnabled,backgroundTheme:()=>saved.backgroundTheme,reduceMotionEnabled:()=>saved.reduceMotion===true,settings:response,
     setAppearance:value=>{saved.appearance=value;return true},
-    save:(folder,awake,refresh,appearance,space,background,allowScreenshots,reduceMotion,mobileDownloadPolicy)=>{saved={appearance,spaceEffectEnabled:space,backgroundTheme:background,allowScreenshots,reduceMotion,mobileDownloadPolicy};return response()},
+    save:(folder,awake,refresh,appearance,space,background,allowScreenshots,reduceMotion,mobileDownloadPolicy,inspectionPrivacy)=>{saved={appearance,spaceEffectEnabled:space,backgroundTheme:background,allowScreenshots,reduceMotion,mobileDownloadPolicy,inspectionPrivacy};return response()},
     reset:()=>{saved={appearance:'system',spaceEffectEnabled:true,backgroundTheme:'space'};return response()}};
   for(const name of ['appearance-boot.js','appearance.js','settings.js'])w.eval(script(name));
   return {dom,w,saved:()=>saved};
 }
+test('inspection privacy defaults on, persists with screenshot consent, and resets on',()=>{
+ const {dom,w,saved}=page();
+ const privacy=w.document.querySelector('#inspection-privacy');
+ assert.equal(privacy.checked,true);
+ w.document.querySelector('#allow-screenshots').checked=true;
+ w.document.querySelector('#settings-form').dispatchEvent(new w.Event('submit',{cancelable:true}));
+ assert.equal(saved().inspectionPrivacy,true);
+ const reloaded=page(saved());assert.equal(reloaded.w.document.querySelector('#inspection-privacy').checked,true);reloaded.dom.window.close();
+ privacy.checked=false;
+ w.document.querySelector('#settings-form').dispatchEvent(new w.Event('submit',{cancelable:true}));
+ assert.equal(saved().inspectionPrivacy,false);
+ w.document.querySelector('#reset').click();assert.equal(privacy.checked,true);
+ dom.window.close();
+});
 test('mobile-data policy uses native settings, saves with the form, and resets to Ask',()=>{
  const {dom,w,saved}=page({mobileDownloadPolicy:'block'});
  const policy=w.document.querySelector('#mobile-downloads');

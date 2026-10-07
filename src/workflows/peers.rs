@@ -105,40 +105,41 @@ pub(in super::super) fn respond_peer_send_post(
     )
 }
 
-pub(in super::super) fn start_peer_send(
-    request: Request,
+/// Starts the existing encrypted transfer independently of HTTP UI rendering.
+pub(in super::super) fn schedule_peer_send(
     client: &Client,
     output_dir: &Path,
     filename: Option<&str>,
     address: Option<&str>,
     key: Option<&str>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), (u16, String)> {
     let Some(filename) = filename.filter(|value| local::media::valid_video_filename(value)) else {
-        return local::html::respond_text(request, 400, "Invalid media filename");
+        return Err((400, "Invalid media filename".to_owned()));
     };
     let path = output_dir.join(filename);
-    if !local::files::is_complete_download(&path)? {
-        return local::html::respond_text(
-            request,
+    if !local::files::is_complete_download(&path).map_err(|error| (500, error.to_string()))? {
+        return Err((
             409,
-            "Finish downloading this item before sending it",
-        );
+            "Finish downloading this item before sending it".to_owned(),
+        ));
     }
     let Some(address) = address else {
-        return local::html::respond_text(request, 400, "Missing receiver address");
+        return Err((400, "Missing receiver address".to_owned()));
     };
     let base = match local::peers::peer_base_url(address) {
         Ok(base) => base,
-        Err(error) => return local::html::respond_text(request, 400, &error.to_string()),
+        Err(error) => return Err((400, error.to_string())),
     };
     let Some(key) = key else {
-        return local::html::respond_text(request, 400, "Missing pairing key");
+        return Err((400, "Missing pairing key".to_owned()));
     };
     let key = match local::peers::decode_peer_key(key) {
         Ok(key) => key,
-        Err(error) => return local::html::respond_text(request, 400, &error.to_string()),
+        Err(error) => return Err((400, error.to_string())),
     };
-    let total = fs::metadata(&path)?.len();
+    let total = fs::metadata(&path)
+        .map_err(|error| (500, error.to_string()))?
+        .len();
     local::peers::set_peer_send_job(
         filename,
         PeerSendJob {
@@ -161,6 +162,21 @@ pub(in super::super) fn start_peer_send(
             });
         }
     });
+    Ok(())
+}
+
+pub(in super::super) fn start_peer_send(
+    request: Request,
+    client: &Client,
+    output_dir: &Path,
+    filename: Option<&str>,
+    address: Option<&str>,
+    key: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
+    if let Err((status, detail)) = schedule_peer_send(client, output_dir, filename, address, key) {
+        return local::html::respond_text(request, status, &detail);
+    }
+    let filename = filename.unwrap_or_default();
     let body = {
         let display_filename = &(local::html::escape_html(filename));
         let filename_json = &(serde_json::to_string(filename)?);

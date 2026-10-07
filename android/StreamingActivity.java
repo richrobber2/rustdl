@@ -59,6 +59,7 @@ import java.util.Map;
  */
 @SuppressWarnings("deprecation")
 public final class StreamingActivity extends Activity {
+    static final String EXTRA_EPISODE = "app.rustdl.extra.STREAM_EPISODE";
     static final String EXTRA_URL = "app.rustdl.extra.STREAM_URL";
     static final String EXTRA_MANIFEST_URL = "app.rustdl.extra.STREAM_MANIFEST_URL";
     private static final String PROVIDER_REFERER = "https://aniwaves.ru/";
@@ -71,6 +72,15 @@ public final class StreamingActivity extends Activity {
     private final HashSet<Integer> attemptedSources = new HashSet<>();
     private final HashSet<String> allowedSourceHosts = new HashSet<>();
 
+    private NativeStreaming nativeControls;
+    private LinearLayout ownedFallbackControls;
+    private StreamingMediaPlayer ownedPlayer;
+    private String ownedMediaUrl="";
+    private boolean nativeControlsReady, nativeInspectionPrivacy=true, nativeResumed, nativeDecoderFailed;
+    private int nativeServerOffset,nativeEpisodeOffset;
+    private final Runnable nativeControlsRefresh=new Runnable() {
+        @Override public void run() { if(nativeControls!=null&&nativeResumed&&!isDestroyed()) { updateNativeDecoder();handler.postDelayed(this,1000); } }
+    };
     private FrameLayout root;
     private LinearLayout shell;
     private LinearLayout filterButtons;
@@ -134,17 +144,44 @@ public final class StreamingActivity extends Activity {
         @Override public void onChange(boolean selfChange) { applyScreenshotPreference(); }
     };
 
+    private int screenshotGeneration;
+
+    private boolean screenshotAllowedNow() {
+        try {
+            Bundle result=getContentResolver().call(Uri.parse("content://"+getPackageName()+".preferences"),"allowed",null,null);
+            return result!=null && result.getBoolean("allowed",false);
+        } catch(RuntimeException unavailable) {return false;}
+    }
+
+    private void releaseScreenshot(int generation,int retries) {
+        root.postOnAnimation(() -> root.postOnAnimation(() -> {
+            if(generation!=screenshotGeneration || isDestroyed() || fullscreenView!=null || !screenshotAllowedNow())return;
+            if(!nativeInspectionPrivacy || nativeControls==null || nativeControls.privacyReady())
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            else if(retries>0) handler.postDelayed(() -> releaseScreenshot(generation,retries-1),100L);
+        }));
+    }
+
     private void applyScreenshotPreference() {
+        int generation=++screenshotGeneration;
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         boolean allowed = false;
         try {
             Bundle result = getContentResolver().call(
                     Uri.parse("content://" + getPackageName() + ".preferences"), "allowed", null, null);
             allowed = result != null && result.getBoolean("allowed", false);
+            nativeInspectionPrivacy = result == null || result.getBoolean("inspectionPrivacy",true);
         } catch (RuntimeException unavailable) {
             // Keep the window protected if consent cannot be read.
         }
-        if (allowed) {
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        if (nativeControls!=null) {
+            if(nativeInspectionPrivacy) {hideFullscreen();if(statusView!=null) statusView.setText("Streaming playback");}
+            if(webView!=null) webView.setVisibility(View.INVISIBLE);
+            updateNativeDecoder();
+        }
+        if(ownedPlayer!=null) ownedPlayer.privacy(nativeInspectionPrivacy);
+        if (allowed && fullscreenView == null) {
+            releaseScreenshot(generation,10);
         } else {
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         }
@@ -153,6 +190,9 @@ public final class StreamingActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        nativeResumed=true;
+        if(ownedPlayer!=null) ownedPlayer.active(true);
+        if(nativeControls!=null) { nativeControls.setActive(true);handler.removeCallbacks(nativeControlsRefresh);handler.post(nativeControlsRefresh); }
         applyScreenshotPreference();
     }
 
@@ -176,9 +216,87 @@ public final class StreamingActivity extends Activity {
 
         buildPlayerUi();
         configureStreamingWebView();
-        loadManifest(null, false);
+        installNativeControls();
+        String selectedEpisode = getIntent().getStringExtra(EXTRA_EPISODE);
+        if (selectedEpisode != null && (selectedEpisode.isEmpty() || selectedEpisode.length() > 64)) selectedEpisode = null;
+        loadManifest(selectedEpisode, false);
         Toast.makeText(this, "Protected player · automatic backup streams enabled",
                 Toast.LENGTH_LONG).show();
+    }
+
+    private void installNativeControls() {
+        nativeControls=NativeStreaming.create(this);
+        if(nativeControls==null) return;
+        View controls=nativeControls.view();
+        int height=Math.min(dp(280),getResources().getDisplayMetrics().heightPixels/2);
+        shell.addView(controls,0,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,height));
+        nativeControls.setActive(true);
+        applyScreenshotPreference();
+        awaitNativeControls(0);
+    }
+    private void awaitNativeControls(int attempts) {
+        if(isDestroyed()||nativeControls==null) return;
+        if(nativeControls.ready()) {
+            if(ownedFallbackControls!=null) ownedFallbackControls.setVisibility(View.GONE);
+            nativeControlsReady=true;statusView.setVisibility(View.GONE);progressBar.setVisibility(View.GONE);
+            for(int index=1;index<shell.getChildCount()-1;index++) shell.getChildAt(index).setVisibility(View.GONE);
+            updateNativeDecoder();
+            handler.removeCallbacks(nativeControlsRefresh);handler.post(nativeControlsRefresh);
+        } else if(attempts<100) handler.postDelayed(()->awaitNativeControls(attempts+1),100);
+        else {nativeControls.setActive(false);shell.removeView(nativeControls.view());nativeControls=null;webView.setVisibility(View.INVISIBLE);applyScreenshotPreference();}
+    }
+    private void updateNativeDecoder() {
+        if(nativeControls==null) return;
+        if(ownedPlayer!=null&&ownedPlayer.failed()&&!failoverScheduled) queueFailover("Native stream playback failed");
+        try {
+            JSONObject page=new JSONObject();page.put("privacy",nativeInspectionPrivacy);page.put("title",nativeInspectionPrivacy?"Anime playback":streamTitle);
+            page.put("watchlisted",watchlisted);page.put("hasWatchlist",!watchlistToken.isEmpty());page.put("filter",sourceFilter);
+            page.put("progress",Math.max(0,Math.min(100,progressBar.getProgress())));page.put("generation",sourceGeneration);page.put("state",nativeDecoderFailed||(ownedPlayer!=null&&ownedPlayer.failed())?"error":ownedPlayer!=null&&ownedPlayer.isReady()?"ready":"loading");
+            if(ownedPlayer!=null) ownedPlayer.append(page);
+            page.put("ready",ownedPlayer!=null&&ownedPlayer.isReady());page.put("canDownload",currentEpisode!=null&&currentSource>=0&&!downloadableSources.isEmpty());
+            ArrayList<String> languages=new ArrayList<>();ArrayList<Boolean> availability=new ArrayList<>();
+            for(Source source:sources) {languages.add(source.language);availability.add(source.available);}
+            java.util.List<Integer> matching=StreamingControlPolicy.matchingIndices(languages,availability,sourceFilter);
+            nativeServerOffset=Math.min(nativeServerOffset,matching.size());
+            page.put("serverOffset",nativeServerOffset);page.put("serverTotal",matching.size());page.put("episodeOffset",nativeEpisodeOffset);page.put("episodeTotal",episodes.size());
+            JSONArray servers=new JSONArray(),items=new JSONArray();
+            for(int rowIndex=nativeServerOffset;rowIndex<Math.min(matching.size(),nativeServerOffset+25);rowIndex++) {
+                int index=matching.get(rowIndex);Source source=sources.get(index);JSONObject row=new JSONObject();row.put("index",index);row.put("label",nativeInspectionPrivacy?"Server":source.label);row.put("selected",index==currentSource);servers.put(row);
+            }
+            for(int index=nativeEpisodeOffset;index<Math.min(episodes.size(),nativeEpisodeOffset+25);index++) {
+                Episode episode=episodes.get(index);JSONObject row=new JSONObject();row.put("index",index);row.put("label",nativeInspectionPrivacy?"Episode":episode.number+" · "+episode.title);row.put("selected",episode.number.equals(currentEpisode));items.put(row);
+            }
+            page.put("servers",servers);page.put("episodes",items);nativeControls.update(page.toString());
+        } catch(Exception invalid) {nativeControls.update("{\"privacy\":true}");}
+    }
+    public void requestNativeDecoder(String action,int index,int expectedGeneration) {
+        if(action==null||index<0||index>100000) return;
+        handler.post(()->{
+            if(isDestroyed()||!nativeResumed||!nativeControlsReady||nativeControls==null) return;
+            if(!"close".equals(action)&&!StreamingControlPolicy.currentGeneration(expectedGeneration,sourceGeneration)) {updateNativeDecoder();return;}
+            switch(action) {
+                case "fullscreen":showOwnedFullscreen();break;
+                case "play":case "pause":case "seek-back":case "seek-forward":if(ownedPlayer!=null) ownedPlayer.command(action);break;
+                case "close":finish();break;
+                case "refresh":loadManifest(currentEpisode,true);break;
+                case "server":if(index<sources.size()) loadSource(index,true);break;
+                case "episode":if(index<episodes.size()) selectEpisode(episodes.get(index).number);break;
+                case "download":chooseEpisodeDownload();break;
+                case "filter":if(index<5) {nativeServerOffset=0;setSourceFilter(new String[]{"all","sub","dub","ready","issues"}[index]);}break;
+                case "watchlist":if(!watchlistToken.isEmpty()&&!watchlistBusy) toggleWatchlist(new Button(this));break;
+                case "servers-page":nativeServerOffset=Math.min(index,sources.size());break;
+                case "episodes-page":nativeEpisodeOffset=Math.min(index,episodes.size());break;
+                default:return;
+            }
+            updateNativeDecoder();
+        });
+    }
+    @Override protected void onPause() {
+        nativeResumed=false;handler.removeCallbacks(nativeControlsRefresh);
+        hideFullscreen();
+        if(ownedPlayer!=null) ownedPlayer.active(false);
+        if(nativeControls!=null) nativeControls.setActive(false);
+        super.onPause();
     }
 
     private static synchronized void configureWebViewDirectory() {
@@ -273,12 +391,17 @@ public final class StreamingActivity extends Activity {
         renderFilterButtons();
 
         FrameLayout playerFrame = new FrameLayout(this);
+        ownedPlayer=new StreamingMediaPlayer(this);
+        ownedPlayer.active(nativeResumed);
         webView = new WebView(this);
         webView.setBackgroundColor(Color.BLACK);
-        webView.setKeepScreenOn(true);
+        webView.setKeepScreenOn(false);
+        webView.setVisibility(View.INVISIBLE);
         playerFrame.addView(webView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
+
+        playerFrame.addView(ownedPlayer.view,new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT));
 
         statusView = new TextView(this);
         statusView.setGravity(Gravity.CENTER);
@@ -296,6 +419,14 @@ public final class StreamingActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(3));
         progressLayout.gravity = Gravity.TOP;
         playerFrame.addView(progressBar, progressLayout);
+        ownedFallbackControls=new LinearLayout(this);
+        for(String action:new String[]{"play","pause","seek-back","seek-forward"}) {
+            Button control=playerButton(action.equals("seek-back")?"−10s":action.equals("seek-forward")?"+10s":action.equals("play")?"Play":"Pause");
+            control.setOnClickListener(view->ownedPlayer.command(action));ownedFallbackControls.addView(control);
+        }
+        FrameLayout.LayoutParams transportLayout=new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(48));transportLayout.gravity=Gravity.BOTTOM;
+        Button fullscreen=playerButton("Fullscreen");fullscreen.setOnClickListener(view->showOwnedFullscreen());ownedFallbackControls.addView(fullscreen);
+        playerFrame.addView(ownedFallbackControls,transportLayout);
         shell.addView(playerFrame, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         setContentView(root);
@@ -342,7 +473,8 @@ public final class StreamingActivity extends Activity {
             @Override
             public void onProgressChanged(WebView view, int progress) {
                 progressBar.setProgress(progress);
-                progressBar.setVisibility(progress >= 100 ? View.GONE : View.VISIBLE);
+                progressBar.setVisibility(nativeControlsReady||progress >= 100 ? View.GONE : View.VISIBLE);
+                updateNativeDecoder();
             }
 
             @Override
@@ -360,6 +492,7 @@ public final class StreamingActivity extends Activity {
 
             @Override
             public void onShowCustomView(View view, CustomViewCallback callback) {
+                if(ownedPlayer!=null) {callback.onCustomViewHidden();return;}
                 showFullscreen(view, callback);
             }
 
@@ -371,7 +504,11 @@ public final class StreamingActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                if ("GET".equals(request.getMethod())) rememberDownloadSource(request.getUrl().toString(), sourceGeneration, "");
+                if ("GET".equals(request.getMethod())) {
+                    String resolved=request.getUrl().toString();
+                    rememberDownloadSource(resolved, sourceGeneration, "", request.getRequestHeaders().get("Referer"));
+                    if(StreamingMediaPolicy.playable(resolved)) return new WebResourceResponse("text/plain","UTF-8",new java.io.ByteArrayInputStream(new byte[0]));
+                }
                 return null;
             }
 
@@ -397,7 +534,7 @@ public final class StreamingActivity extends Activity {
                     WebView view,
                     WebResourceRequest request,
                     WebResourceError error) {
-                if (request.isForMainFrame()) queueFailover("Stream failed");
+                if (request.isForMainFrame()&&ownedMediaUrl.isEmpty()) queueFailover("Stream failed");
             }
 
             @Override
@@ -405,7 +542,7 @@ public final class StreamingActivity extends Activity {
                     WebView view,
                     WebResourceRequest request,
                     WebResourceResponse response) {
-                if (request.isForMainFrame() && response.getStatusCode() >= 400) {
+                if (request.isForMainFrame() && ownedMediaUrl.isEmpty() && response.getStatusCode() >= 400) {
                     queueFailover("Server returned " + response.getStatusCode());
                 }
             }
@@ -431,6 +568,9 @@ public final class StreamingActivity extends Activity {
     }
 
     private void rememberDownloadSource(String value, int generation, String mime) {
+        rememberDownloadSource(value,generation,mime,null);
+    }
+    private void rememberDownloadSource(String value, int generation, String mime, String resolvedReferer) {
         if (value == null || value.length() > 16000) return;
         Uri uri = Uri.parse(value);
         String path = uri.getPath() == null ? "" : uri.getPath().toLowerCase(Locale.ROOT);
@@ -441,6 +581,13 @@ public final class StreamingActivity extends Activity {
         final String key = uri.getHost() + path;
         runOnUiThread(() -> {
             if (generation != sourceGeneration || currentSource < 0) return;
+            if(ownedPlayer!=null&&StreamingMediaPolicy.playable(value)&&ownedMediaUrl.isEmpty()) {
+                ownedMediaUrl=value;
+                Map<String,String> headers=new HashMap<>();headers.put("User-Agent",webView.getSettings().getUserAgentString());
+                String referer=resolvedReferer!=null&&isSafePlayerUri(Uri.parse(resolvedReferer))?resolvedReferer:StreamingMediaPolicy.playable(sources.get(currentSource).url)?PROVIDER_REFERER:sources.get(currentSource).url;headers.put("Referer",referer);String cookie=CookieManager.getInstance().getCookie(value);if(cookie!=null)headers.put("Cookie",cookie);
+                webView.stopLoading();webView.loadUrl("about:blank");
+                ownedPlayer.open(value,headers,generation);
+            }
             if (downloadableSources.size() < 12 || downloadableSources.containsKey(key)) {
                 String previous = downloadableSources.put(key, value);
                 hlsDownloads.remove(previous);
@@ -454,29 +601,27 @@ public final class StreamingActivity extends Activity {
             Toast.makeText(this, "Start the episode first, then tap Download. If no source appears, try another server.", Toast.LENGTH_LONG).show();
             return;
         }
-        final ArrayList<String> candidates = new ArrayList<>();
-        for (String value : downloadableSources.values()) if (hlsDownloads.contains(value)) candidates.add(value);
-        if (candidates.isEmpty()) candidates.addAll(downloadableSources.values());
-        final HashSet<String> hlsChoices = new HashSet<>(hlsDownloads);
+        final java.util.List<StreamingDownloadChoices.Choice> choices = StreamingDownloadChoices.select(downloadableSources.values(), hlsDownloads);
         final String episode = currentEpisode;
         final String title = streamTitle + " · episode " + episode;
         final Source selectedSource = sources.get(currentSource);
         final String identity = watchUrl + "\n" + episode + "\n" + selectedSource.language;
         final String referer = selectedSource.url;
         final String agent = webView.getSettings().getUserAgentString();
-        String[] labels = new String[candidates.size()];
+        String[] labels = new String[choices.size()];
         for (int i = 0; i < labels.length; i++) {
-            Uri uri = Uri.parse(candidates.get(i));
-            labels[i] = (hlsDownloads.contains(candidates.get(i)) ? "HLS" : "MP4") + " · " + uri.getHost() + (labels.length > 1 ? " · " + (i + 1) : "");
+            Uri uri = Uri.parse(choices.get(i).source);
+            labels[i] = nativeControls!=null&&nativeInspectionPrivacy?choices.get(i).label(i):(choices.get(i).hls ? "HLS" : "MP4") + " · " + uri.getHost() + (labels.length > 1 ? " · " + (i + 1) : "");
         }
-        new AlertDialog.Builder(this).setTitle("Download episode " + episode)
+        new AlertDialog.Builder(this).setTitle(nativeControls!=null&&nativeInspectionPrivacy?"Download episode":"Download episode " + episode)
                 .setItems(labels, (dialog, index) -> {
-                    String value = candidates.get(index);
+                    StreamingDownloadChoices.Choice choice = choices.get(index);
+                    String value = choice.source;
                     Intent request = new Intent(this, AnimeDownloadService.class)
                             .putExtra("url", value).putExtra("identity", identity).putExtra("title", title)
                             .putExtra("referer", referer).putExtra("userAgent", agent)
                             .putExtra("cookie", CookieManager.getInstance().getCookie(value))
-                            .putExtra("hls", hlsChoices.contains(value));
+                            .putExtra("hls", choice.hls);
                     startForegroundService(request);
                     Toast.makeText(this, "Episode download started. Progress is in notifications.", Toast.LENGTH_LONG).show();
                 }).setNegativeButton("Cancel", null).show();
@@ -484,7 +629,10 @@ public final class StreamingActivity extends Activity {
 
     private void loadManifest(String episode, boolean refresh) {
         int generation = ++manifestGeneration;
+        ownedMediaUrl="";
+        nativeDecoderFailed=false;pageFinished=false;
         sourceGeneration++;
+        if(ownedPlayer!=null) ownedPlayer.reset(sourceGeneration);
         downloadableSources.clear();
         hlsDownloads.clear();
         showStatus("Checking primary and backup streams…");
@@ -492,11 +640,14 @@ public final class StreamingActivity extends Activity {
         episodeSpinner.setEnabled(false);
         previousButton.setEnabled(false);
         nextButton.setEnabled(false);
+        String nativeToken = getIntent().getStringExtra("native-manifest-token");
+        getIntent().removeExtra("native-manifest-token");
         new Thread(() -> {
             try {
                 Uri.Builder builder = Uri.parse(manifestUrl).buildUpon();
                 if (episode != null) builder.appendQueryParameter("episode", episode);
                 if (refresh) builder.appendQueryParameter("refresh", "1");
+                else if (nativeToken != null) builder.appendQueryParameter("nativeToken", nativeToken);
                 JSONObject manifest = requestManifest(builder.build().toString());
                 runOnUiThread(() -> {
                     if (generation == manifestGeneration) applyManifest(manifest);
@@ -592,6 +743,8 @@ public final class StreamingActivity extends Activity {
             attemptedSources.clear();
             currentSource = -1;
             int first = firstFilteredSource();
+            String requestedSource=getIntent().getStringExtra("native-source-url");
+            if(requestedSource!=null) {for(int i=0;i<sources.size();i++) if(sources.get(i).url.equals(requestedSource)) {first=i;break;}getIntent().removeExtra("native-source-url");}
             if (first < 0) {
                 sourceFilter = "all";
                 first = firstFilteredSource();
@@ -729,12 +882,7 @@ public final class StreamingActivity extends Activity {
     }
 
     private boolean matchesFilter(Source source, String filter) {
-        if ("sub".equals(filter) || "dub".equals(filter)) {
-            return filter.equalsIgnoreCase(source.language);
-        }
-        if ("ready".equals(filter)) return source.available;
-        if ("issues".equals(filter)) return !source.available;
-        return true;
+        return StreamingControlPolicy.matches(source.language,source.available,filter);
     }
 
     private void setSourceFilter(String filter) {
@@ -796,8 +944,10 @@ public final class StreamingActivity extends Activity {
         downloadableSources.clear();
         hlsDownloads.clear();
         failoverScheduled = false;
+        nativeDecoderFailed=false;
         pageFinished = false;
         Source source = sources.get(index);
+        ownedMediaUrl="";if(ownedPlayer!=null) ownedPlayer.reset(sourceGeneration);
         Uri uri = Uri.parse(source.url);
         allowedSourceHosts.clear();
         allowedSourceHosts.addAll(source.allowedHosts);
@@ -806,18 +956,19 @@ public final class StreamingActivity extends Activity {
                 ? (source.redirected ? " · checked redirect" : "")
                 : (source.issue.isEmpty() ? " · retrying issue" : " · retrying " + source.issue);
         showStatus("Opening " + source.label + state + "…");
-        progressBar.setVisibility(View.VISIBLE);
+        progressBar.setVisibility(nativeControlsReady?View.GONE:View.VISIBLE);
         updateSelectedSourceButton();
         Map<String, String> headers = new HashMap<>();
         headers.put("Referer", PROVIDER_REFERER);
         webView.stopLoading();
-        webView.loadUrl(source.url, headers);
+        if(StreamingMediaPolicy.playable(source.url)) rememberDownloadSource(source.url,sourceGeneration,"");
+        else webView.loadUrl(source.url, headers);
         int generation = sourceGeneration;
         handler.postDelayed(() -> {
-            if (generation == sourceGeneration && !pageFinished) {
+            if (generation == sourceGeneration && ownedPlayer!=null && ownedPlayer.resolving()) {
                 queueFailover("Server timed out");
             }
-        }, 15_000);
+        }, 30_000);
     }
 
     private void updateSelectedSourceButton() {
@@ -909,6 +1060,7 @@ public final class StreamingActivity extends Activity {
     }
 
     private void showManifestError(String detail) {
+        nativeDecoderFailed=true;
         String safeDetail = detail == null || detail.trim().isEmpty()
                 ? "Could not resolve player sources"
                 : detail;
@@ -923,9 +1075,10 @@ public final class StreamingActivity extends Activity {
     }
 
     private void showStatus(String text) {
-        statusView.setText(text);
-        statusView.setVisibility(View.VISIBLE);
-        progressBar.setVisibility(View.VISIBLE);
+        statusView.setText(nativeControls!=null&&nativeInspectionPrivacy?"Checking streaming playback…":text);
+        statusView.setVisibility(nativeControlsReady?View.GONE:View.VISIBLE);
+        progressBar.setVisibility(nativeControlsReady?View.GONE:View.VISIBLE);
+        updateNativeDecoder();
     }
 
     private static boolean isSafePlayerUri(Uri uri) {
@@ -941,11 +1094,27 @@ public final class StreamingActivity extends Activity {
         return host == null ? "" : host.toLowerCase(Locale.ROOT);
     }
 
+    private void showOwnedFullscreen() {
+        if(fullscreenView!=null){hideFullscreen();return;}
+        if(ownedPlayer==null||nativeInspectionPrivacy||!nativeResumed)return;
+        ViewGroup previous=(ViewGroup)ownedPlayer.view.getParent();if(previous==null)return;
+        FrameLayout frame=new FrameLayout(this);frame.setBackgroundColor(Color.BLACK);
+        previous.removeView(ownedPlayer.view);frame.addView(ownedPlayer.view,new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT));
+        LinearLayout controls=new LinearLayout(this);
+        Button exit=playerButton("Exit fullscreen");exit.setOnClickListener(view->hideFullscreen());controls.addView(exit);
+        Button play=playerButton("Play");play.setOnClickListener(view->ownedPlayer.command("play"));controls.addView(play);
+        Button pause=playerButton("Pause");pause.setOnClickListener(view->ownedPlayer.command("pause"));controls.addView(pause);
+        FrameLayout.LayoutParams controlsLayout=new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,dp(48));controlsLayout.gravity=Gravity.BOTTOM;
+        frame.addView(controls,controlsLayout);
+        showFullscreen(frame,()->{frame.removeView(ownedPlayer.view);previous.addView(ownedPlayer.view,new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT));});
+    }
+
     private void showFullscreen(View view, WebChromeClient.CustomViewCallback callback) {
-        if (fullscreenView != null) {
+        if (fullscreenView != null || nativeInspectionPrivacy) {
             callback.onCustomViewHidden();
             return;
         }
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         fullscreenView = view;
         fullscreenCallback = callback;
         previousSystemUiVisibility = getWindow().getDecorView().getSystemUiVisibility();
@@ -969,6 +1138,7 @@ public final class StreamingActivity extends Activity {
             fullscreenCallback.onCustomViewHidden();
             fullscreenCallback = null;
         }
+        applyScreenshotPreference();
     }
 
     private int dp(int value) {
@@ -986,6 +1156,9 @@ public final class StreamingActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        hideFullscreen();
+        if(ownedPlayer!=null) ownedPlayer.destroy();
+        if(nativeControls!=null) nativeControls.setActive(false);
         getContentResolver().unregisterContentObserver(screenshotObserver);
         manifestGeneration++;
         sourceGeneration++;
