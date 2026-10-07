@@ -35,6 +35,12 @@ jobs:
           cargo fmt --manifest-path native-ui/Cargo.toml --check
       - name: Test
         run: cargo test --release
+      - name: Fetch pinned Android platform jar
+        run: |
+          url=https://raw.githubusercontent.com/Sable/android-platforms/1e98db1a199e8f7f85541af26bfc27019501b132/android-35/android.jar
+          mkdir -p android/platform
+          curl -L --fail --retry 3 -o android/platform/android.jar "$url"
+          echo "4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b  android/platform/android.jar" | sha256sum --check
       - name: Test fixed native navigation destinations
         run: python3 tests/integration/test_native_home.py
       - name: Test network policy in isolation

@@ -38,7 +38,7 @@ edition="2024"
 [dependencies]
 taffy="=0.13.0"
 [lib]
-path="../../tests/native_scroll_layout.rs"
+path="../../tests/fixtures/native_scroll_layout.rs"
 """)
         subprocess.run(["cargo", "test", "--offline", "--manifest-path",
                         str(directory / "Cargo.toml"), "--lib"], check=True)
