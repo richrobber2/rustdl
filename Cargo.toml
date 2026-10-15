@@ -16,7 +16,6 @@ chacha20poly1305 = "0.10"
 qrcode = { version = "0.14", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rustypipe = { version = "0.11.4", default-features = false, features = ["rustls-tls-webpki-roots"] }
-rquickjs-sys = { version = "0.9.0", features = ["bindgen"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"
@@ -24,6 +23,9 @@ tokio = { version = "1", features = ["rt"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+# QuickJS 0.9 ships desktop bindings, but Android needs generated bindings.
+# Keep this feature override aligned with RustyPipe's transitive QuickJS version.
+rquickjs-sys = { version = "0.9.0", features = ["bindgen"] }
 
 [profile.release]
 lto = false
