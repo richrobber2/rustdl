@@ -1,10 +1,4 @@
 
-    @view-transition { navigation: auto; }
-    @keyframes page-out { to { opacity: 0; transform: scale(.985); } }
-    @keyframes page-in { from { opacity: 0; transform: scale(1.015); } }
-    ::view-transition-old(root) { animation: 160ms ease-out both page-out; }
-    ::view-transition-new(root) { animation: 280ms cubic-bezier(.2,.8,.2,1) both page-in; }
-    ::view-transition-group(*) { animation-duration: 380ms; animation-timing-function: cubic-bezier(.2,.8,.2,1); }
     :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
     * { box-sizing: border-box; }
     body {

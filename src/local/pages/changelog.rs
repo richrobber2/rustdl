@@ -8,6 +8,9 @@ pub(in super::super::super) const CHANGELOG: &[(&str, &[&str])] = &[
     (
         "0.1.45",
         &[
+            "Reduced large-gallery page-generation copies by filling the small page shell before inserting the gallery index, and preserved literal shell markers in gallery data; added opt-in synthetic gallery, queue and page timing/allocation benchmarks with output checksums and automatic fixture cleanup.",
+            "Shortened shared page transitions to 160 ms with opacity-only root fades, enabled consistent same-origin transitions across app pages, and added immediate local-link feedback with cancellation, timeout and back/forward cleanup while retaining reduced-motion behavior and normal navigation.",
+            "Reduced format-preparation memory by sharing immutable discovery sessions instead of copying each selected item’s complete format list and provider URLs; discovery pages now move candidate storage into the same session, while format order, deduplication and selection tokens are preserved.",
             "Kept playlist Previous/Next controls in the sticky toolbars, reused a bounded pool of row containers, and reserved consistent page space so switching pages preserves scroll position and avoids row-height jumps.",
             "Reduced playlist preview memory by sharing one owned entry session, streaming playlist sections instead of retaining full response JSON trees, dropping each response before continuation requests, and rendering only the current 32 rows while preserving full-list filtering, selection and submission.",
             "Accepted current desktop and mobile YouTube playlist data, including escaped initial JSON strings and legacy nested item lists; rejected repeated continuation tokens and enforced item limits before storing additional entries.",

@@ -203,8 +203,13 @@ pub(crate) fn decorate_app_html(mut html: String) -> String {
     if !html.contains("<!doctype html") || html.contains("data-rustdl-appearance") {
         return html;
     }
+    let navigation = if html.contains(local::web_assets::view_transition_script_path()) {
+        String::new()
+    } else {
+        local::web_assets::view_transition_script_tag()
+    };
     let head = format!(
-        r#"<link data-rustdl-appearance rel="stylesheet" href="{}"><script>{APPEARANCE_BOOT_SCRIPT}</script></head>"#,
+        r#"<link data-rustdl-appearance rel="stylesheet" href="{}"><script>{APPEARANCE_BOOT_SCRIPT}</script>{navigation}</head>"#,
         local::web_assets::appearance_css_path()
     );
     html = html.replacen("</head>", &head, 1);

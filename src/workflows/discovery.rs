@@ -152,8 +152,8 @@ pub(in super::super) fn respond_discovery_page(
         return local::html::respond_text(request, 404, "No downloadable media was found");
     }
     let count = candidates.len();
-    let token = local::discovery::store_discovery_session(candidates.clone());
-    let cards = candidates
+    let (token, session) = local::discovery::store_shared_discovery_session(candidates);
+    let cards = session.candidates
         .iter()
         .enumerate()
         .map(|(index, candidate)| {
@@ -197,7 +197,7 @@ type SelectedDownload = (String, ResolvedVideo, Option<PlaylistMembership>);
 
 fn selected_downloads(
     picks: &[String],
-    sessions: &HashMap<String, local::discovery::DiscoverySession>,
+    sessions: &local::discovery::DiscoverySessions,
 ) -> Vec<SelectedDownload> {
     let mut selected = Vec::new();
     let mut seen = HashSet::new();
@@ -329,10 +329,10 @@ mod native_import_tests {
         };
         let sessions = HashMap::from([(
             "opaque".into(),
-            local::discovery::DiscoverySession {
+            std::sync::Arc::new(local::discovery::DiscoverySession {
                 created: 0,
                 candidates: vec![candidate],
-            },
+            }),
         )]);
         let picks = [
             "missing:0:0",

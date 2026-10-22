@@ -81,6 +81,21 @@ pub(in super::super) fn respond_queue_page(
     request: Request,
     errors: &[String],
 ) -> Result<(), Box<dyn Error>> {
+    let body = render_queue_page(errors);
+    let response = Response::from_string(local::web_assets::decorate_app_html(body))
+        .with_status_code(StatusCode(200))
+        .with_header(local::html::header(
+            "Content-Type",
+            "text/html; charset=utf-8",
+        ))
+        .with_header(local::html::html_csp())
+        .with_header(local::html::header("Cache-Control", "no-store"))
+        .with_header(local::html::header("X-Content-Type-Options", "nosniff"));
+    request.respond(response)?;
+    Ok(())
+}
+
+pub(in super::super) fn render_queue_page(errors: &[String]) -> String {
     let mut jobs = local::queue::download_jobs()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -163,17 +178,7 @@ pub(in super::super) fn respond_queue_page(
             rows = rows
         )
     };
-    let response = Response::from_string(local::web_assets::decorate_app_html(body))
-        .with_status_code(StatusCode(200))
-        .with_header(local::html::header(
-            "Content-Type",
-            "text/html; charset=utf-8",
-        ))
-        .with_header(local::html::html_csp())
-        .with_header(local::html::header("Cache-Control", "no-store"))
-        .with_header(local::html::header("X-Content-Type-Options", "nosniff"));
-    request.respond(response)?;
-    Ok(())
+    body
 }
 
 pub(in super::super) fn acquire_download_slot(filename: &str) -> bool {

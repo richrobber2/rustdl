@@ -579,7 +579,7 @@ fn gallery_cards_open_one_player_without_embedding_videos() {
     assert!(html.contains(&format!(r#"href="/watch/{filename}""#)));
     assert!(html.contains(&format!(r#"src="/thumbnail/{filename}.jpg""#)));
     assert!(html.contains(local::web_assets::index_css_path()));
-    assert!(local::web_assets::index_css().contains("@view-transition { navigation: auto; }"));
+    assert!(APPEARANCE_CSS.contains("@view-transition { navigation:auto; }"));
     assert!(html.contains(r#"data-view-transition-name="video-2091257067264733401-1""#));
 
     fs::remove_file(path).expect("remove gallery test video");
@@ -973,6 +973,25 @@ fn app_state_uses_stable_download_phase_names() {
     assert_eq!(state["downloaded"], 25);
     assert_eq!(state["quality"], "Balanced · 720p");
     assert!(state.get("media_url").is_none());
+}
+
+#[test]
+fn common_navigation_script_is_injected_once_on_every_decorated_page() {
+    let page = "<!doctype html><html><head></head><body><main>Synthetic page</main></body></html>";
+    let path = local::web_assets::view_transition_script_path();
+    let html = local::web_assets::decorate_app_html(page.to_owned());
+    assert_eq!(html.matches(path).count(), 1);
+    assert_eq!(local::web_assets::decorate_app_html(html.clone()), html);
+    let existing = page.replace(
+        "</head>",
+        &format!("{}</head>", local::web_assets::view_transition_script_tag()),
+    );
+    assert_eq!(
+        local::web_assets::decorate_app_html(existing)
+            .matches(path)
+            .count(),
+        1
+    );
 }
 
 #[test]

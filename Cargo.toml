@@ -19,6 +19,13 @@ required-features = ["heap-profile"]
 test = false
 bench = false
 
+[[bin]]
+name = "rustdl-page-bench"
+path = "src/page_bench_main.rs"
+required-features = ["heap-profile"]
+test = false
+bench = false
+
 [dependencies]
 dhat = { version = "=0.3.3", optional = true }
 blake3 = "1.8"

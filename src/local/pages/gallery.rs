@@ -335,22 +335,12 @@ pub(in super::super::super) fn render_playlist(
     } else {
         ""
     };
-    let playback_script = local::web_assets::playback_script_tag();
-    let view_transition_script = local::web_assets::view_transition_script_tag();
-    let mut html = local::web_assets::index_html_template()
-        .replace("<!--SAVED_VIDEOS-->", &library)
-        .replace("<!--INSPECTION_BANNER-->", banner)
-        .replace("<!--MODE_SWITCH-->", mode_switch)
-        .replace(
-            "<!--PLAYBACK_SCRIPT-->",
-            if local::runtime::inspection_mode() {
-                ""
-            } else {
-                &playback_script
-            },
-        )
-        .replace("<!--VIEW_TRANSITIONS-->", &view_transition_script)
-        .replace("<!--DEV_RELOAD-->", &local::dev::dev_reload_script());
+    let mut html = render_shell(
+        &library,
+        banner,
+        mode_switch,
+        local::runtime::inspection_mode(),
+    );
     if local::runtime::inspection_mode() {
         html = html.replace(
             r#"<a class="queue-link" id="activity-link" href="/activity">Activity <span class="activity-count" id="activity-count" hidden></span> →</a>"#,
@@ -382,4 +372,38 @@ pub(in super::super::super) fn render_playlist(
         GALLERY_LAST_ITEMS.store(item_count as u64, Ordering::Relaxed);
     }
     Ok(html)
+}
+
+fn render_shell(library: &str, banner: &str, mode_switch: &str, inspection: bool) -> String {
+    let playback_script = local::web_assets::playback_script_tag();
+    let view_transition_script = local::web_assets::view_transition_script_tag();
+    local::web_assets::index_html_template()
+        .replace("<!--INSPECTION_BANNER-->", banner)
+        .replace("<!--MODE_SWITCH-->", mode_switch)
+        .replace(
+            "<!--PLAYBACK_SCRIPT-->",
+            if inspection { "" } else { &playback_script },
+        )
+        .replace("<!--VIEW_TRANSITIONS-->", &view_transition_script)
+        .replace("<!--DEV_RELOAD-->", &local::dev::dev_reload_script())
+        // Insert the potentially large gallery only after the small shell is complete.
+        // Shell markers in serialized user data must remain literal data.
+        .replace("<!--SAVED_VIDEOS-->", library)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_shell;
+
+    #[test]
+    fn gallery_payload_is_inserted_once_without_expanding_shell_markers() {
+        let payload = "synthetic <!--INSPECTION_BANNER--> <!--MODE_SWITCH--> <!--PLAYBACK_SCRIPT--> <!--VIEW_TRANSITIONS--> <!--DEV_RELOAD--> <!--SAVED_VIDEOS-->";
+        for inspection in [false, true] {
+            let html = render_shell(payload, "test-banner", "test-mode", inspection);
+            assert_eq!(html.matches(payload).count(), 1);
+            assert!(html.contains("test-banner"));
+            assert!(html.contains("test-mode"));
+            assert_eq!(html.contains("/__app/playback."), !inspection);
+        }
+    }
 }

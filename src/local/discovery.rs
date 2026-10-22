@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tiny_http::{Request, Response, StatusCode};
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(in super::super) struct DiscoverySession {
     pub(in super::super) created: u64,
     pub(in super::super) candidates: Vec<DiscoveryCandidate>,
@@ -23,7 +23,9 @@ pub(in super::super) struct PlaylistSession {
     pub(in super::super) entries: Vec<YouTubePlaylistEntry>,
 }
 
-pub(in super::super) static DISCOVERY_SESSIONS: OnceLock<Mutex<HashMap<String, DiscoverySession>>> =
+pub(in super::super) type DiscoverySessions = HashMap<String, Arc<DiscoverySession>>;
+
+pub(in super::super) static DISCOVERY_SESSIONS: OnceLock<Mutex<DiscoverySessions>> =
     OnceLock::new();
 
 pub(in super::super) static PLAYLIST_SESSIONS: OnceLock<
@@ -31,6 +33,12 @@ pub(in super::super) static PLAYLIST_SESSIONS: OnceLock<
 > = OnceLock::new();
 
 pub(in super::super) fn store_discovery_session(candidates: Vec<DiscoveryCandidate>) -> String {
+    store_shared_discovery_session(candidates).0
+}
+
+pub(in super::super) fn store_shared_discovery_session(
+    candidates: Vec<DiscoveryCandidate>,
+) -> (String, Arc<DiscoverySession>) {
     let token = local::security::random_token();
     let created = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -50,14 +58,12 @@ pub(in super::super) fn store_discovery_session(candidates: Vec<DiscoveryCandida
         };
         sessions.remove(&oldest);
     }
-    sessions.insert(
-        token.clone(),
-        DiscoverySession {
-            created,
-            candidates,
-        },
-    );
-    token
+    let session = Arc::new(DiscoverySession {
+        created,
+        candidates,
+    });
+    sessions.insert(token.clone(), Arc::clone(&session));
+    (token, session)
 }
 
 pub(in super::super) fn store_playlist_session(
@@ -160,10 +166,38 @@ pub(in super::super) fn respond_quality_page(
     request: Request,
     picks: &[String],
 ) -> Result<(), Box<dyn Error>> {
-    let sessions = DISCOVERY_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()));
-    let sessions = sessions
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(body) = render_quality_selection(picks) else {
+        return local::html::respond_text(request, 400, "Select at least one video");
+    };
+    let response = Response::from_string(local::web_assets::decorate_app_html(body))
+        .with_status_code(StatusCode(200))
+        .with_header(local::html::header(
+            "Content-Type",
+            "text/html; charset=utf-8",
+        ))
+        .with_header(local::html::html_csp())
+        .with_header(local::html::header("Cache-Control", "no-store"))
+        .with_header(local::html::header("X-Content-Type-Options", "nosniff"));
+    request.respond(response)?;
+    Ok(())
+}
+
+struct QualitySelection {
+    token: String,
+    index: usize,
+    session: Arc<DiscoverySession>,
+}
+
+impl QualitySelection {
+    fn candidate(&self) -> &DiscoveryCandidate {
+        &self.session.candidates[self.index]
+    }
+}
+
+fn select_quality_candidates(
+    picks: &[String],
+    sessions: &DiscoverySessions,
+) -> Vec<QualitySelection> {
     let mut selected = Vec::new();
     let mut seen = HashSet::new();
     for pick in picks {
@@ -173,30 +207,51 @@ pub(in super::super) fn respond_quality_page(
         let Ok(index) = index.parse::<usize>() else {
             continue;
         };
-        let Some(candidate) = sessions
-            .get(token)
-            .and_then(|session| session.candidates.get(index))
-        else {
+        let Some(session) = sessions.get(token) else {
             continue;
         };
-        if seen.insert(candidate.resolved.filename()) {
-            selected.push((token.to_owned(), index, candidate.clone()));
+        let Some(candidate) = session.candidates.get(index) else {
+            continue;
+        };
+        if seen.insert(candidate.resolved.filename.as_str()) {
+            selected.push(QualitySelection {
+                token: token.to_owned(),
+                index,
+                session: Arc::clone(session),
+            });
         }
     }
-    drop(sessions);
+    selected
+}
+
+// Retain immutable sessions while rendering, then release the map lock. Large
+// candidate format lists and provider URLs stay in their original allocation.
+pub(in super::super) fn render_quality_selection(picks: &[String]) -> Option<String> {
+    let selected = {
+        let sessions = DISCOVERY_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()));
+        let sessions = sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        select_quality_candidates(picks, &sessions)
+    };
+    render_selected_quality(&selected)
+}
+
+fn render_selected_quality(selected: &[QualitySelection]) -> Option<String> {
     if selected.is_empty() {
-        return local::html::respond_text(request, 400, "Select at least one video");
+        return None;
     }
     let count = selected.len();
     let cards = selected
         .iter()
-        .map(|(token, index, candidate)| {
+        .map(|selection| {
+            let candidate = selection.candidate();
             let options = candidate
                 .qualities
                 .iter()
                 .enumerate()
                 .map(|(quality_index, quality)| {
-                    local::discovery::render_quality_option(token, *index, quality_index, quality)
+                    local::discovery::render_quality_option(&selection.token, selection.index, quality_index, quality)
                 })
                 .collect::<String>();
             format!(
@@ -222,17 +277,7 @@ pub(in super::super) fn respond_quality_page(
             count = count
         )
     };
-    let response = Response::from_string(local::web_assets::decorate_app_html(body))
-        .with_status_code(StatusCode(200))
-        .with_header(local::html::header(
-            "Content-Type",
-            "text/html; charset=utf-8",
-        ))
-        .with_header(local::html::html_csp())
-        .with_header(local::html::header("Cache-Control", "no-store"))
-        .with_header(local::html::header("X-Content-Type-Options", "nosniff"));
-    request.respond(response)?;
-    Ok(())
+    Some(body)
 }
 
 #[cfg(test)]
@@ -262,5 +307,108 @@ mod playlist_preview_tests {
         let mut sessions = PLAYLIST_SESSIONS.get().unwrap().lock().unwrap();
         assert!(Arc::ptr_eq(sessions.get(&token).unwrap(), &session));
         sessions.remove(&token);
+    }
+}
+
+#[cfg(test)]
+mod quality_memory_tests {
+    use super::*;
+
+    fn candidate(filename: &str) -> DiscoveryCandidate {
+        let resolved = ResolvedVideo {
+            filename: filename.to_owned(),
+            media_url: "https://example.invalid/private-stream".to_owned(),
+            audio_url: None,
+            extract_audio: false,
+            quality_label: Some("720p <video>".to_owned()),
+            quality_height: Some(720),
+        };
+        let mut audio = resolved.clone();
+        audio.filename = filename.replace(".mp4", ".m4a");
+        audio.extract_audio = true;
+        audio.quality_label = Some("Audio & sound".to_owned());
+        audio.quality_height = None;
+        DiscoveryCandidate {
+            qualities: vec![resolved.clone(), audio],
+            resolved,
+            source_url: "https://example.invalid/private-source".to_owned(),
+            author: "Synthetic <creator>".to_owned(),
+            text: String::new(),
+            playlist: None,
+        }
+    }
+
+    #[test]
+    fn discovery_storage_moves_candidates_into_one_shared_session() {
+        let candidates = vec![candidate("synthetic-owned.mp4")];
+        let buffer = candidates.as_ptr();
+        let qualities = candidates[0].qualities.as_ptr();
+        let (token, session) = store_shared_discovery_session(candidates);
+        assert_eq!(session.candidates.as_ptr(), buffer);
+        assert_eq!(session.candidates[0].qualities.as_ptr(), qualities);
+        let mut sessions = DISCOVERY_SESSIONS.get().unwrap().lock().unwrap();
+        assert!(Arc::ptr_eq(sessions.get(&token).unwrap(), &session));
+        sessions.remove(&token);
+    }
+
+    #[test]
+    fn quality_selection_shares_formats_preserves_order_and_survives_eviction() {
+        let session = Arc::new(DiscoverySession {
+            created: 0,
+            candidates: vec![
+                candidate("synthetic-same.mp4"),
+                candidate("synthetic-second.mp4"),
+            ],
+        });
+        let other = Arc::new(DiscoverySession {
+            created: 0,
+            candidates: vec![candidate("synthetic-same.mp4")],
+        });
+        let sessions = DiscoverySessions::from([
+            ("opaque".to_owned(), Arc::clone(&session)),
+            ("other".to_owned(), Arc::clone(&other)),
+        ]);
+        let picks = [
+            "missing:0",
+            "opaque:x",
+            "opaque:99",
+            "opaque:0:2",
+            "opaque:1",
+            "other:0",
+            "opaque:0",
+            "opaque:1",
+        ]
+        .map(str::to_owned);
+        let selected = select_quality_candidates(&picks, &sessions);
+        assert_eq!(selected.len(), 2);
+        assert_eq!((&*selected[0].token, selected[0].index), ("opaque", 1));
+        assert_eq!((&*selected[1].token, selected[1].index), ("other", 0));
+        assert!(Arc::ptr_eq(&selected[0].session, &session));
+        assert!(Arc::ptr_eq(&selected[1].session, &other));
+        assert_eq!(
+            selected[0].candidate().qualities.as_ptr(),
+            session.candidates[1].qualities.as_ptr()
+        );
+        drop(sessions);
+        drop(session);
+        drop(other);
+        let html = render_selected_quality(&selected).unwrap();
+        assert_eq!(html.matches("class=\"quality-card\"").count(), 2);
+        assert!(html.contains("value=\"opaque:1:0\""));
+        assert!(html.contains("value=\"other:0:1\""));
+        assert!(html.contains("Synthetic &lt;creator&gt;"));
+        assert!(html.contains("720p &lt;video&gt;"));
+        assert!(html.contains("Audio &amp; sound"));
+        assert!(!html.contains("private-stream"));
+        assert!(!html.contains("private-source"));
+    }
+
+    #[test]
+    fn empty_or_expired_quality_selections_remain_empty() {
+        let sessions = DiscoverySessions::new();
+        let picks = ["expired:0".to_owned()];
+        assert!(select_quality_candidates(&picks, &sessions).is_empty());
+        assert!(render_selected_quality(&[]).is_none());
+        assert!(render_quality_selection(&[]).is_none());
     }
 }

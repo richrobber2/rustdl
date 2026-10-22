@@ -5,12 +5,60 @@ use std::sync::{Arc, Barrier, Mutex};
 
 pub(crate) struct PlaylistFixture(Vec<local::playlist_resolution::Selection>);
 
+pub(crate) struct GalleryFixture {
+    path: std::path::PathBuf,
+    count: usize,
+}
+impl GalleryFixture {
+    fn new(count: usize) -> Result<Self, &'static str> {
+        use std::os::unix::fs::DirBuilderExt;
+        let base = std::path::Path::new("target/page-bench-fixtures");
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(base)
+            .map_err(|_| "cannot create fixture parent")?;
+        let path = base.join(format!(
+            "gallery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .map_err(|_| "cannot create private gallery fixture")?;
+        let fixture = Self { path, count };
+        for index in 0..count {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(fixture.path.join(format!("youtube-bench{index:06}.mp4")))
+                .map_err(|_| "cannot create synthetic file")?;
+        }
+        Ok(fixture)
+    }
+}
+impl Drop for GalleryFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 pub(crate) enum Workload {
     Activity,
+    ActivityPage,
+    SettingsPage,
+    ChangelogPage,
+    Gallery(GalleryFixture),
+    QueuePage(usize),
     PlaylistPage(String, bool),
     Changelog,
     Catalog(String),
     Queue(usize),
+    Quality(Vec<String>),
     Playlist(PlaylistFixture, bool),
 }
 
@@ -18,6 +66,12 @@ impl Workload {
     pub(crate) fn new(name: &str) -> Result<Self, &'static str> {
         match name {
             "activity" => Ok(Self::Activity),
+            "page-activity" => Ok(Self::ActivityPage),
+            "page-settings" => Ok(Self::SettingsPage),
+            "page-changelog" => Ok(Self::ChangelogPage),
+            "gallery-500" | "gallery-5000" => Ok(Self::Gallery(GalleryFixture::new(
+                if name.ends_with("5000") { 5000 } else { 500 },
+            )?)),
             "playlist-page" | "playlist-page-baseline" => {
                 let path = std::env::var("RUSTDL_PLAYLIST_HTML")
                     .map_err(|_| "set RUSTDL_PLAYLIST_HTML to a captured playlist page")?;
@@ -32,9 +86,70 @@ impl Workload {
                     std::fs::read_to_string(path).map_err(|_| "cannot read playlist fixture")?;
                 Ok(Self::PlaylistPage(html, name.ends_with("baseline")))
             }
+            "quality-500" => {
+                use local::models::{DiscoveryCandidate, ResolvedVideo};
+                let token = "synthetic-quality-session";
+                let mut sessions = local::discovery::DISCOVERY_SESSIONS
+                    .get_or_init(|| Mutex::new(Default::default()))
+                    .lock()
+                    .unwrap();
+                if !sessions.is_empty() {
+                    return Err("synthetic quality selection requires a fresh process");
+                }
+                let candidates = (0..500)
+                    .map(|index| {
+                        let qualities: Vec<_> = (0..12)
+                            .map(|quality| {
+                                let audio = quality == 11;
+                                ResolvedVideo {
+                                    filename: format!(
+                                        "synthetic-{index}.{}",
+                                        if audio { "m4a" } else { "mp4" }
+                                    ),
+                                    media_url: format!(
+                                        "https://example.invalid/{index}/{quality}?synthetic={}",
+                                        "x".repeat(2048)
+                                    ),
+                                    audio_url: (!audio).then(|| {
+                                        format!(
+                                            "https://example.invalid/audio/{index}?synthetic={}",
+                                            "y".repeat(1024)
+                                        )
+                                    }),
+                                    extract_audio: audio,
+                                    quality_label: Some(if audio {
+                                        "Audio only".to_owned()
+                                    } else {
+                                        format!("{}p", (quality + 1) * 144)
+                                    }),
+                                    quality_height: (!audio).then_some((quality + 1) * 144),
+                                }
+                            })
+                            .collect();
+                        DiscoveryCandidate {
+                            resolved: qualities[0].clone(),
+                            qualities,
+                            source_url: format!("https://example.invalid/source/{index}"),
+                            author: format!("Synthetic creator {index}"),
+                            text: format!("Synthetic item {index}"),
+                            playlist: None,
+                        }
+                    })
+                    .collect();
+                sessions.insert(
+                    token.to_owned(),
+                    Arc::new(local::discovery::DiscoverySession {
+                        created: 0,
+                        candidates,
+                    }),
+                );
+                Ok(Self::Quality(
+                    (0..500).map(|index| format!("{token}:{index}")).collect(),
+                ))
+            }
             "changelog" => Ok(Self::Changelog),
-            "queue-500" | "queue-5000" => {
-                let count = if name == "queue-500" { 500 } else { 5000 };
+            "queue-500" | "queue-5000" | "queue-page-500" | "queue-page-5000" => {
+                let count = if name.ends_with("5000") { 5000 } else { 500 };
                 let mut jobs = local::queue::download_jobs().lock().unwrap();
                 if !jobs.is_empty() {
                     return Err("synthetic queue requires a fresh process");
@@ -68,7 +183,11 @@ impl Workload {
                 drop(jobs);
                 // Exclude lazy global setup and pre-existing fixture storage.
                 drop(local::activity_state::snapshot());
-                Ok(Self::Queue(count))
+                Ok(if name.starts_with("queue-page-") {
+                    Self::QueuePage(count)
+                } else {
+                    Self::Queue(count)
+                })
             }
             "playlist-500" | "playlist-cancel-500" => {
                 local::discovery::DISCOVERY_SESSIONS
@@ -109,7 +228,7 @@ impl Workload {
                 Ok(Self::Catalog(html))
             }
             _ => Err(
-                "choose activity, changelog, catalog, queue-500, queue-5000, playlist-500, playlist-cancel-500, playlist-page or playlist-page-baseline",
+                "unknown workload; see PERFORMANCE.md for page, gallery, queue, quality, catalog and playlist cases",
             ),
         }
     }
@@ -146,6 +265,32 @@ impl Workload {
                     }
                     u64::from_le_bytes(hash.finalize().as_bytes()[..8].try_into().unwrap()) as usize
                 }
+                Self::ActivityPage | Self::SettingsPage | Self::ChangelogPage => {
+                    let body = match self {
+                        Self::ActivityPage => local::activity::render(""),
+                        Self::SettingsPage => local::settings::render(""),
+                        _ => local::pages::changelog::render(),
+                    };
+                    hash_page(local::web_assets::decorate_app_html(body))
+                }
+                Self::Gallery(fixture) => {
+                    let body = local::pages::gallery::render(&fixture.path)
+                        .map_err(|_| "synthetic gallery rendering failed")?;
+                    if local::gallery::GALLERY_LAST_ITEMS.load(std::sync::atomic::Ordering::Relaxed)
+                        as usize
+                        != fixture.count
+                    {
+                        return Err("gallery fixture lost items");
+                    }
+                    hash_page(local::web_assets::decorate_app_html(body))
+                }
+                Self::QueuePage(count) => {
+                    let body = local::queue::render_queue_page(&[]);
+                    if body.matches("<article data-filename=").count() != *count {
+                        return Err("queue page lost rows");
+                    }
+                    hash_page(local::web_assets::decorate_app_html(body))
+                }
                 Self::Activity => std::hint::black_box(local::activity::render("")).len(),
                 Self::Changelog => std::hint::black_box(local::pages::changelog::render()).len(),
                 Self::Queue(count) => {
@@ -160,6 +305,25 @@ impl Workload {
                         return Err("queue snapshot lost counts or exceeded its visible-row bound");
                     }
                     std::hint::black_box(snapshot.to_string()).len()
+                }
+                Self::Quality(picks) => {
+                    let body = local::discovery::render_quality_selection(picks)
+                        .ok_or("synthetic quality selection was lost")?;
+                    if body.matches("class=\"quality-card\"").count() != 500
+                        || body
+                            .matches("<option value=\"synthetic-quality-session:")
+                            .count()
+                            != 6000
+                        || !body.contains("Add 500 to queue")
+                    {
+                        return Err("quality page lost candidates or formats");
+                    }
+                    let body = local::web_assets::decorate_app_html(body);
+                    u64::from_le_bytes(
+                        blake3::hash(body.as_bytes()).as_bytes()[..8]
+                            .try_into()
+                            .unwrap(),
+                    ) as usize
                 }
                 Self::Playlist(fixture, cancel) => profile_playlist(&fixture.0, *cancel)?,
                 Self::Catalog(html) => {
@@ -259,4 +423,12 @@ fn profile_playlist(
         }
         Ok(std::hint::black_box(session.candidates.len()))
     }
+}
+
+fn hash_page(body: String) -> usize {
+    u64::from_le_bytes(
+        blake3::hash(body.as_bytes()).as_bytes()[..8]
+            .try_into()
+            .unwrap(),
+    ) as usize
 }
