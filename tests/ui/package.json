@@ -1,5 +1,14 @@
 {
   "private": true,
-  "scripts": { "test": "node --test changelog.test.cjs inspection-privacy.test.cjs parallax.test.cjs background-theme.test.cjs gallery-refresh.test.cjs playlist-selection.test.cjs playlist-resolution.test.cjs list-pagination.test.cjs" },
-  "devDependencies": { "jsdom": "30.0.1" }
+  "scripts": {
+    "build:js": "node ../../scripts/minify-js.cjs",
+    "lint": "sh ../../scripts/lint-js.sh",
+    "test": "node --test changelog.test.cjs inspection-privacy.test.cjs parallax.test.cjs background-theme.test.cjs gallery-refresh.test.cjs playlist-selection.test.cjs playlist-resolution.test.cjs list-pagination.test.cjs minified-bridges.test.cjs"
+  },
+  "devDependencies": {
+    "@oxc-minify/binding-wasm32-wasip1": "0.155.0",
+    "jsdom": "30.0.1",
+    "oxc-minify": "0.155.0",
+    "oxlint": "1.89.0"
+  }
 }

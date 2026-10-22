@@ -64,6 +64,15 @@ fn run_worker(job: &Job, mut resolve: impl FnMut(&str) -> Result<DiscoveryCandid
     }
     workflows::playlist_resolution::worker_finished(job);
 }
+
+// Profiling reuses the worker with a closed synthetic resolver, never start().
+#[cfg(feature = "heap-profile")]
+pub(in super::super) fn profile_worker(
+    job: &Job,
+    resolve: impl FnMut(&str) -> Result<DiscoveryCandidate, String>,
+) {
+    run_worker(job, resolve);
+}
 fn worker_finished(job: &Job) {
     let mut job = job.lock().unwrap_or_else(|e| e.into_inner());
     job.workers = job.workers.saturating_sub(1);

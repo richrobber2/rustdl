@@ -8,6 +8,20 @@ pub(in super::super::super) const CHANGELOG: &[(&str, &[&str])] = &[
     (
         "0.1.45",
         &[
+            "Kept playlist Previous/Next controls in the sticky toolbars, reused a bounded pool of row containers, and reserved consistent page space so switching pages preserves scroll position and avoids row-height jumps.",
+            "Reduced playlist preview memory by sharing one owned entry session, streaming playlist sections instead of retaining full response JSON trees, dropping each response before continuation requests, and rendering only the current 32 rows while preserving full-list filtering, selection and submission.",
+            "Accepted current desktop and mobile YouTube playlist data, including escaped initial JSON strings and legacy nested item lists; rejected repeated continuation tokens and enforced item limits before storing additional entries.",
+            "Reduced Activity refresh memory by counting every queued job while selecting and cloning only the visible 60 downloads and 30 transfers, preserving category priority, filename ordering and full queue counts.",
+            "Extended optional DHAT profiling with 500/5,000-job activity snapshots and 500-entry playlist completion/cancellation using three real workers with a synthetic resolver, bounded-result and ordering checks, and cleanup of published synthetic sessions.",
+            "Reduced HTML escaping and release-history rendering allocations with a shared append encoder and direct output construction, preserving escaped text and pagination markup; validated equivalent output and compared synthetic DHAT workloads.",
+            "Added an opt-in DHAT executable and symbolized profiling build for closed synthetic activity, changelog and catalog workloads, with private JSON allocation reports and text summaries; normal APKs retain their existing allocator and build profile.",
+            "Bounded the WebView sunrise/sunset sequence to three overlapping frame layers, created frames only when due, removed fully covered images and cancelled pending timers and animations on interruption; retained reverse playback, transition duration, reduced motion and bundled-frame preloading.",
+            "Reduced the WebView starfield's oversized animated surface while retaining drift coverage, and released its transform compositing hint for both system and app reduced-motion modes; actual driver memory savings remain device-dependent.",
+            "Added checksum-pinned OSV-Scanner, Gitleaks and Opengrep Core security checks for dependencies, committed and pending source secrets, and targeted JavaScript/Android/Rust risks; added synthetic rule tests and CI, kept raw reports private and fully redacted, and reported upstream maintenance notices separately from actionable vulnerabilities.",
+            "Updated the engine and native UI lockfiles to advisory-fixed compatible Rustls, rustls-webpki and Quinn protocol patches, plus the engine's webpki-roots bundle, for TLS handshake handling, session-secret diagnostics, certificate trust and QUIC panic fixes.",
+            "Supplied an API-qualified Android target for QuickJS binding generation in Termux APK builds, retaining explicit caller overrides and scoping the default to the RustDL engine build.",
+            "Added optional build-time Oxc JavaScript minification with pinned native/WASI tooling, preserved Android bridge property names and checked template markers, and ran the synthetic UI suite against generated scripts in CI. Ordinary builds retain source scripts without Node; enable minified-js or RUSTDL_MINIFY_JS=1 for smaller embedded assets.",
+            "Added pinned Oxlint JavaScript correctness checks and synthetic UI tests to CI, with a standalone executable override for Android CPUs requiring a compatible build; removed unused activity state and a diagnostics catch binding, and documented the release loader's required live-collection snapshot. The linter is not bundled in the app.",
             "Limited the QuickJS bindgen dependency override to Android, preserving generated Android bindings while allowing supported desktop builds to use bundled bindings without the bindgen/libclang build requirement; retained all locked crate versions.",
             "Restored the CI Rust test run by moving the synthetic Taffy scroll-layout fixture out of Cargo's auto-discovered integration tests, fetched the pinned, SHA-256-verified Android API 35 platform jar in CI so native navigation and poster-policy checks compile, and pre-fetched the locked native UI crates so the offline accessibility and scroll-layout fixtures resolve on clean runners.",
             "Gave every native GPUI screen the same top header with Back and title; Storage, Activity Center, Updates, Discover downloads, Anime and Device transfers no longer place Back at the bottom of the page and now draw the shared translucent page surface over the background.",
@@ -718,43 +732,57 @@ fn release_id(version: &str) -> String {
 }
 
 fn render_releases(start: usize, count: usize) -> String {
+    use std::fmt::Write;
     let current = env!("CARGO_PKG_VERSION");
-    CHANGELOG
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(count)
-        .map(|(index, (version, changes))| {
-            let id = release_id(version);
-            let badge = if *version == current {
-                r#"<span class="current">Current</span>"#
-            } else {
-                ""
-            };
-            let items = changes
+    let selected = CHANGELOG.iter().enumerate().skip(start).take(count);
+    // Reserve close to the final size without retaining an oversized cache.
+    let capacity = selected
+        .clone()
+        .map(|(_, (version, changes))| {
+            512 + changes
                 .iter()
-                .map(|change| format!("<li>{}</li>", local::html::escape_html(change)))
-                .collect::<String>();
-            let destinations = destinations(version)
-                .iter()
-                .map(|(href, label)| {
-                    format!(
-                        r#"<a class="goto" href="{}">Go to {} <span aria-hidden="true">→</span></a>"#,
-                        local::html::escape_html(href),
-                        local::html::escape_html(label)
-                    )
-                })
-                .collect::<String>();
-            let actions = if destinations.is_empty() {
-                String::new()
-            } else {
-                format!(r#"<footer class="release-actions"><span>Find it in RustDL</span><div>{destinations}</div></footer>"#)
-            };
-            format!(
-                r##"<article id="{id}" data-release-index="{index}"><header><h2><a class="version-link" href="#{id}">Version {version}</a></h2>{badge}</header><ul>{items}</ul>{actions}</article>"##
-            )
+                .map(|change| local::html::escaped_html_len(change) + 9)
+                .sum::<usize>()
+                + destinations(version)
+                    .iter()
+                    .map(|(href, label)| {
+                        100 + local::html::escaped_html_len(href)
+                            + local::html::escaped_html_len(label)
+                    })
+                    .sum::<usize>()
         })
-        .collect()
+        .sum();
+    let mut output = String::with_capacity(capacity);
+    for (index, (version, changes)) in selected {
+        let id = release_id(version);
+        let badge = if *version == current {
+            r#"<span class="current">Current</span>"#
+        } else {
+            ""
+        };
+        write!(output, r##"<article id="{id}" data-release-index="{index}"><header><h2><a class="version-link" href="#{id}">Version {version}</a></h2>{badge}</header><ul>"##).unwrap();
+        for change in *changes {
+            output.push_str("<li>");
+            local::html::push_escaped_html(&mut output, change);
+            output.push_str("</li>");
+        }
+        output.push_str("</ul>");
+        let links = destinations(version);
+        if !links.is_empty() {
+            output
+                .push_str(r#"<footer class="release-actions"><span>Find it in RustDL</span><div>"#);
+            for (href, label) in links {
+                output.push_str(r#"<a class="goto" href=""#);
+                local::html::push_escaped_html(&mut output, href);
+                output.push_str(r#"">Go to "#);
+                local::html::push_escaped_html(&mut output, label);
+                output.push_str(r#" <span aria-hidden="true">→</span></a>"#);
+            }
+            output.push_str("</div></footer>");
+        }
+        output.push_str("</article>");
+    }
+    output
 }
 
 pub(in super::super::super) fn respond_batch(request: Request) -> Result<(), Box<dyn Error>> {
@@ -799,6 +827,7 @@ pub(in super::super::super) fn respond_batch(request: Request) -> Result<(), Box
 }
 
 pub(in super::super::super) fn render() -> String {
+    use std::fmt::Write;
     let current = env!("CARGO_PKG_VERSION");
     let options = CHANGELOG
         .iter()
@@ -814,19 +843,87 @@ pub(in super::super::super) fn render() -> String {
     let releases = render_releases(0, INITIAL_RELEASES);
     {
         let dev_reload = &(local::dev::dev_reload_script());
-        format!(
+        let mut output = String::with_capacity(
+            include_str!("../../../assets/html/changelog.html").len()
+                + include_str!("../../../assets/css/changelog.css").len()
+                + include_js!("changelog.js").len()
+                + dev_reload.len()
+                + options.len()
+                + releases.len()
+                + 64,
+        );
+        write!(
+            output,
             include_str!("../../../assets/html/changelog.html"),
             dev_reload = dev_reload,
             page_css = include_str!("../../../assets/css/changelog.css"),
-            page_script = include_str!("../../../assets/js/changelog.js"),
+            page_script = include_js!("changelog.js"),
             options = options,
             releases = releases,
             next = INITIAL_RELEASES.min(CHANGELOG.len()),
             total = CHANGELOG.len()
         )
+        .unwrap();
+        output
     }
 }
 
 pub(in super::super::super) fn respond(request: Request) -> Result<(), Box<dyn Error>> {
     local::html::respond_html(request, local::pages::changelog::render())
+}
+
+// Frozen pre-optimization renderer used only as an output-equivalence oracle.
+#[cfg(test)]
+fn legacy_render_releases(start: usize, count: usize) -> String {
+    let current = env!("CARGO_PKG_VERSION");
+    CHANGELOG
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(count)
+        .map(|(index, (version, changes))| {
+            let id = release_id(version);
+            let badge = if *version == current {
+                r#"<span class="current">Current</span>"#
+            } else {
+                ""
+            };
+            let items = changes
+                .iter()
+                .map(|change| format!("<li>{}</li>", local::html::escape_html(change)))
+                .collect::<String>();
+            let destinations = destinations(version)
+                .iter()
+                .map(|(href, label)| {
+                    format!(
+                        r#"<a class="goto" href="{}">Go to {} <span aria-hidden="true">→</span></a>"#,
+                        local::html::escape_html(href),
+                        local::html::escape_html(label)
+                    )
+                })
+                .collect::<String>();
+            let actions = if destinations.is_empty() {
+                String::new()
+            } else {
+                format!(r#"<footer class="release-actions"><span>Find it in RustDL</span><div>{destinations}</div></footer>"#)
+            };
+            format!(
+                r##"<article id="{id}" data-release-index="{index}"><header><h2><a class="version-link" href="#{id}">Version {version}</a></h2>{badge}</header><ul>{items}</ul>{actions}</article>"##
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[test]
+fn release_batches_match_legacy_markup_exactly() {
+    for start in 0..=CHANGELOG.len() + 1 {
+        for count in [0, 1, INITIAL_RELEASES, RELEASE_BATCH, usize::MAX] {
+            assert_eq!(
+                render_releases(start, count),
+                legacy_render_releases(start, count),
+                "start={start} count={count}"
+            );
+        }
+    }
 }

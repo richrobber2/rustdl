@@ -79,7 +79,14 @@ if [ ! -f "$ANDROID_JAR" ]; then
     exit 1
 fi
 
-cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release --lib
+# Termux's headers require an API-qualified target during QuickJS bindgen.
+# Scope the default to this Cargo invocation; retain caller overrides.
+RUSTDL_BINDGEN_ARGS=${BINDGEN_EXTRA_CLANG_ARGS:---target=aarch64-linux-android24}
+case "${RUSTDL_MINIFY_JS:-0}" in
+    0) BINDGEN_EXTRA_CLANG_ARGS="$RUSTDL_BINDGEN_ARGS" cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release --lib ;;
+    1) BINDGEN_EXTRA_CLANG_ARGS="$RUSTDL_BINDGEN_ARGS" cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release --lib --features minified-js ;;
+    *) echo "RUSTDL_MINIFY_JS must be 0 or 1" >&2; exit 2 ;;
+esac
 if [ "$NATIVE_UI" = 1 ]; then
     NATIVE_LIBRARY=$(sh "$ROOT_DIR/native-ui/build-termux.sh")
 fi

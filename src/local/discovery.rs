@@ -5,7 +5,7 @@ use super::super::local::models::{DiscoveryCandidate, ResolvedVideo};
 use super::super::local::youtube::{YouTubePlaylist, YouTubePlaylistEntry};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tiny_http::{Request, Response, StatusCode};
 
@@ -15,7 +15,7 @@ pub(in super::super) struct DiscoverySession {
     pub(in super::super) candidates: Vec<DiscoveryCandidate>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(in super::super) struct PlaylistSession {
     pub(in super::super) created: u64,
     pub(in super::super) playlist_id: String,
@@ -26,8 +26,9 @@ pub(in super::super) struct PlaylistSession {
 pub(in super::super) static DISCOVERY_SESSIONS: OnceLock<Mutex<HashMap<String, DiscoverySession>>> =
     OnceLock::new();
 
-pub(in super::super) static PLAYLIST_SESSIONS: OnceLock<Mutex<HashMap<String, PlaylistSession>>> =
-    OnceLock::new();
+pub(in super::super) static PLAYLIST_SESSIONS: OnceLock<
+    Mutex<HashMap<String, Arc<PlaylistSession>>>,
+> = OnceLock::new();
 
 pub(in super::super) fn store_discovery_session(candidates: Vec<DiscoveryCandidate>) -> String {
     let token = local::security::random_token();
@@ -59,7 +60,9 @@ pub(in super::super) fn store_discovery_session(candidates: Vec<DiscoveryCandida
     token
 }
 
-pub(in super::super) fn store_playlist_session(playlist: &YouTubePlaylist) -> String {
+pub(in super::super) fn store_playlist_session(
+    playlist: YouTubePlaylist,
+) -> (String, Arc<PlaylistSession>) {
     let token = local::security::random_token();
     let created = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -79,16 +82,14 @@ pub(in super::super) fn store_playlist_session(playlist: &YouTubePlaylist) -> St
         };
         sessions.remove(&oldest);
     }
-    sessions.insert(
-        token.clone(),
-        PlaylistSession {
-            created,
-            playlist_id: playlist.playlist_id.clone(),
-            title: playlist.title.clone(),
-            entries: playlist.entries.clone(),
-        },
-    );
-    token
+    let session = Arc::new(PlaylistSession {
+        created,
+        playlist_id: playlist.playlist_id,
+        title: playlist.title,
+        entries: playlist.entries,
+    });
+    sessions.insert(token.clone(), Arc::clone(&session));
+    (token, session)
 }
 
 pub(in super::super) fn respond_playlist_selection_page(
@@ -98,40 +99,8 @@ pub(in super::super) fn respond_playlist_selection_page(
     if playlist.entries.is_empty() {
         return local::html::respond_text(request, 404, "No selectable playlist videos were found");
     }
-    let count = playlist.entries.len();
-    let token = local::discovery::store_playlist_session(&playlist);
-    let cards = playlist
-        .entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            format!(
-                r#"<label class="candidate"><input type="checkbox" name="pick" value="{token}:{index}"><span class="check">✓</span><span class="candidate-copy"><strong><i>#{}</i> {}</strong><span>{}</span><code>youtube-{}.mp4</code></span></label>"#,
-                index + 1,
-                local::html::escape_html(&entry.title),
-                local::html::escape_html(&entry.author),
-                entry.video_id
-            )
-        })
-        .collect::<String>();
-    let body = {
-        let playlist_title = &(local::html::escape_html(&playlist.title));
-        let dev_reload = &(local::dev::dev_reload_script());
-        format!(
-            include_str!("../../assets/html/playlist.html"),
-            DISCOVERY_CSS = DISCOVERY_CSS,
-            playlist_title = playlist_title,
-            dev_reload = dev_reload,
-            page_css = include_str!("../../assets/css/playlist.css"),
-            page_script = format!(
-                "{}\n{}",
-                include_str!("../../assets/js/list-pagination.js"),
-                include_str!("../../assets/js/playlist.js")
-            ),
-            cards = cards,
-            count = count
-        )
-    };
+    let (token, session) = local::discovery::store_playlist_session(playlist);
+    let body = local::discovery::render_playlist_selection(&token, &session)?;
     let response = Response::from_string(local::web_assets::decorate_app_html(body))
         .with_status_code(StatusCode(200))
         .with_header(local::html::header(
@@ -145,10 +114,29 @@ pub(in super::super) fn respond_playlist_selection_page(
     Ok(())
 }
 
+// Keep a compact data model in the page; playlist.js materializes only 32 rows.
+pub(in super::super) fn render_playlist_selection(
+    token: &str,
+    session: &PlaylistSession,
+) -> Result<String, Box<dyn Error>> {
+    let playlist_title = local::html::escape_html(&session.title);
+    let entries = local::html::safe_script_json(&session.entries)?;
+    Ok(format!(
+        include_str!("../../assets/html/playlist.html"),
+        DISCOVERY_CSS = DISCOVERY_CSS,
+        playlist_title = playlist_title,
+        dev_reload = local::dev::dev_reload_script(),
+        page_css = include_str!("../../assets/css/playlist.css"),
+        page_script = include_js!("playlist.js"),
+        entries = entries,
+        token = local::html::escape_html(token),
+        count = session.entries.len(),
+    ))
+}
+
 pub(in super::super) const DISCOVERY_CSS: &str = include_str!("../../assets/css/discovery.css");
 
-pub(in super::super) const BULK_QUALITY_SCRIPT: &str =
-    include_str!("../../assets/js/bulk-quality.js");
+pub(in super::super) const BULK_QUALITY_SCRIPT: &str = include_js!("bulk-quality.js");
 
 pub(in super::super) fn render_quality_option(
     token: &str,
@@ -224,7 +212,7 @@ pub(in super::super) fn respond_quality_page(
             include_str!("../../assets/html/quality.html"),
             BULK_QUALITY_SCRIPT = format!(
                 "{}\n{}",
-                include_str!("../../assets/js/list-pagination.js"),
+                include_js!("list-pagination.js"),
                 BULK_QUALITY_SCRIPT
             ),
             DISCOVERY_CSS = DISCOVERY_CSS,
@@ -245,4 +233,34 @@ pub(in super::super) fn respond_quality_page(
         .with_header(local::html::header("X-Content-Type-Options", "nosniff"));
     request.respond(response)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod playlist_preview_tests {
+    use super::*;
+
+    #[test]
+    fn preview_moves_entries_into_one_shared_session_and_embeds_safe_data() {
+        let entries = vec![YouTubePlaylistEntry {
+            video_id: "AAAAAAAAAAA".to_owned(),
+            title: "</script><img src=x onerror=1> & 雪".to_owned(),
+            author: "Creator".to_owned(),
+        }];
+        let pointer = entries.as_ptr();
+        let (token, session) = store_playlist_session(YouTubePlaylist {
+            playlist_id: "PLsynthetic".to_owned(),
+            title: "A <playlist>".to_owned(),
+            entries,
+        });
+        assert_eq!(session.entries.as_ptr(), pointer);
+        let html = render_playlist_selection(&token, &session).unwrap();
+        assert!(html.contains("A &lt;playlist&gt;"));
+        assert!(!html.contains("</script><img"));
+        assert!(html.contains("\\u003c/script\\u003e"));
+        assert!(!html.contains("<label class=\"candidate\">"));
+        assert!(html.contains("id=\"playlist-data\""));
+        let mut sessions = PLAYLIST_SESSIONS.get().unwrap().lock().unwrap();
+        assert!(Arc::ptr_eq(sessions.get(&token).unwrap(), &session));
+        sessions.remove(&token);
+    }
 }

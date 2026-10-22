@@ -4,7 +4,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {JSDOM}=require('jsdom');
 const root=path.resolve(__dirname,'../..');
-const script=name=>fs.readFileSync(path.join(root,'assets/js',name),'utf8');
+const script=require('./read-script.cjs');
 function page(initial={}) {
   let saved={reduceMotion:false,allowScreenshots:false,appearance:'dark',backgroundTheme:'space',spaceEffectEnabled:true,...initial};
   const dom=new JSDOM(fs.readFileSync(path.join(root,'assets/html/settings.html'),'utf8'),{url:'http://localhost/settings',runScripts:'outside-only'});

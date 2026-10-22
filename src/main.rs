@@ -1,6 +1,15 @@
+macro_rules! include_js {
+    ($name:literal) => {
+        include_str!(concat!(env!("OUT_DIR"), "/js/", $name))
+    };
+}
+
 pub(crate) mod external;
 pub(crate) mod local;
 pub(crate) mod workflows;
+
+#[cfg(feature = "heap-profile")]
+pub(crate) mod heap_workload;
 
 #[cfg(all(test, feature = "dev"))]
 mod dev;

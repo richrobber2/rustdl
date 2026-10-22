@@ -1,15 +1,13 @@
 use super::local;
-use super::local::discovery::BULK_QUALITY_SCRIPT;
 use super::local::gallery::{GALLERY_INITIAL_ITEMS, PlaylistMembership};
 use super::local::media::GrowingFile;
 use super::local::models::ResolvedVideo;
 use super::local::pages::changelog::CHANGELOG;
-use super::local::peers::{PEER_CSS, PEER_PAIRING_SCRIPT, PeerManifest};
+use super::local::peers::{PEER_CSS, PeerManifest};
 use super::local::queue::{DownloadJob, DownloadPhase};
 use super::local::web_assets::{
-    APPEARANCE_BOOT_SCRIPT, APPEARANCE_CSS, APPEARANCE_SCRIPT, DARK_SPACE_BACKGROUND,
-    DARK_SPACE_BACKGROUND_PLACEHOLDER, INDEX_CSS, INDEX_HTML, PLAYBACK_SCRIPT, PLAYER_CSS,
-    VIEW_TRANSITION_SCRIPT,
+    APPEARANCE_CSS, DARK_SPACE_BACKGROUND, DARK_SPACE_BACKGROUND_PLACEHOLDER, INDEX_CSS,
+    INDEX_HTML, PLAYER_CSS,
 };
 use super::local::x::{V2Format, V2ThreadResponse, V2Video};
 use reqwest::Url;
@@ -17,6 +15,15 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, thread};
+
+// Source-shape checks intentionally inspect readable inputs. Generated behavior is
+// exercised by the same synthetic UI suite with RUSTDL_JS_TEST_DIR set in CI.
+const SOURCE_APPEARANCE_BOOT_SCRIPT: &str = include_str!("../assets/js/appearance-boot.js");
+const SOURCE_APPEARANCE_SCRIPT: &str = include_str!("../assets/js/appearance.js");
+const SOURCE_PLAYBACK_SCRIPT: &str = include_str!("../assets/js/playback.js");
+const SOURCE_VIEW_TRANSITION_SCRIPT: &str = include_str!("../assets/js/view-transitions.js");
+const SOURCE_PEER_PAIRING_SCRIPT: &str = include_str!("../assets/js/peer-pairing.js");
+const SOURCE_BULK_QUALITY_SCRIPT: &str = include_str!("../assets/js/bulk-quality.js");
 
 #[test]
 fn parses_status_id_and_video_number() {
@@ -124,7 +131,7 @@ fn extracts_all_ordered_playlist_items_from_current_youtube_page() {
       }}}]}}
     };</script>"#;
     let data: serde_json::Value =
-        serde_json::from_str(local::youtube::initial_data(html).unwrap()).unwrap();
+        serde_json::from_str(&local::youtube::initial_data(html).unwrap()).unwrap();
     let (entries, continuation) = local::youtube::initial_playlist_entries(&data).unwrap();
     assert_eq!(
         entries
@@ -155,7 +162,7 @@ fn rejects_playlist_data_outside_the_playlist_item_section() {
       }}}]}}
     };</script>"#;
     let data: serde_json::Value =
-        serde_json::from_str(local::youtube::initial_data(html).unwrap()).unwrap();
+        serde_json::from_str(&local::youtube::initial_data(html).unwrap()).unwrap();
     assert!(
         local::youtube::initial_playlist_entries(&data)
             .unwrap()
@@ -345,9 +352,9 @@ fn appearance_is_shared_persistent_and_motion_aware() {
     assert!(html.contains(local::web_assets::appearance_css_path()));
     assert!(html.contains(local::web_assets::appearance_script_path()));
     assert_eq!(html.matches("data-rustdl-appearance").count(), 2);
-    assert!(APPEARANCE_BOOT_SCRIPT.contains("bridge.appearance()"));
-    assert!(APPEARANCE_SCRIPT.contains("document.startViewTransition"));
-    assert!(APPEARANCE_SCRIPT.contains("visibilitychange"));
+    assert!(SOURCE_APPEARANCE_BOOT_SCRIPT.contains("bridge.appearance()"));
+    assert!(SOURCE_APPEARANCE_SCRIPT.contains("document.startViewTransition"));
+    assert!(SOURCE_APPEARANCE_SCRIPT.contains("visibilitychange"));
     assert!(APPEARANCE_CSS.contains("rustdl-space-drift"));
     assert!(APPEARANCE_CSS.contains("prefers-reduced-motion"));
     assert!(APPEARANCE_CSS.contains("data-theme=\"light\""));
@@ -449,6 +456,52 @@ fn escapes_paths_for_result_page() {
         local::html::escape_html("a&<b>'\""),
         "a&amp;&lt;b&gt;&#39;&quot;"
     );
+}
+
+#[test]
+fn html_encoders_preserve_unicode_entities_and_append_prefixes() {
+    let atoms = [
+        "",
+        "text",
+        "é雪🦀",
+        "\0\n",
+        "&",
+        "<",
+        ">",
+        "\"",
+        "'",
+        "&amp;lt;",
+        "&amp;quot;",
+        "&#039;&apos;&#x27;",
+    ];
+    for a in atoms {
+        for b in atoms {
+            for c in atoms {
+                let input = format!("{a}{b}{c}");
+                let escaped = input
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;")
+                    .replace('"', "&quot;")
+                    .replace('\'', "&#39;");
+                assert_eq!(local::html::escape_html(&input), escaped);
+                assert_eq!(local::html::escaped_html_len(&input), escaped.len());
+                let mut appended = "existing prefix: ".to_owned();
+                local::html::push_escaped_html(&mut appended, &input);
+                assert_eq!(appended, format!("existing prefix: {escaped}"));
+                let decoded = input
+                    .replace("&amp;", "&")
+                    .replace("&quot;", "\"")
+                    .replace("&#x27;", "'")
+                    .replace("&#39;", "'")
+                    .replace("&#039;", "'")
+                    .replace("&apos;", "'")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">");
+                assert_eq!(local::html::html_entity_decode(&input), decoded);
+            }
+        }
+    }
 }
 
 #[test]
@@ -562,8 +615,8 @@ fn gallery_bounds_initial_dom_and_embeds_the_full_index() {
     );
     assert!(html.contains("id=\"gallery-data\""));
     assert!(html.contains(&filenames[0]));
-    assert!(PLAYBACK_SCRIPT.contains("IntersectionObserver"));
-    assert!(PLAYBACK_SCRIPT.contains("batchSize=32"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("IntersectionObserver"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("batchSize=32"));
 
     for filename in filenames {
         fs::remove_file(directory.join(filename)).expect("remove gallery item");
@@ -573,28 +626,28 @@ fn gallery_bounds_initial_dom_and_embeds_the_full_index() {
 
 #[test]
 fn playback_enhancements_cover_resume_seek_speed_and_pip() {
-    assert!(PLAYBACK_SCRIPT.contains("savePosition"));
-    assert!(PLAYBACK_SCRIPT.contains("dblclick"));
-    assert!(PLAYBACK_SCRIPT.contains("playbackRate"));
-    assert!(PLAYBACK_SCRIPT.contains("enterPictureInPicture"));
-    assert!(PLAYBACK_SCRIPT.contains("Continue watching"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("savePosition"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("dblclick"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("playbackRate"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("enterPictureInPicture"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("Continue watching"));
     assert!(PLAYER_CSS.contains("body.pip"));
-    assert!(PLAYBACK_SCRIPT.contains("mini-player-mode"));
-    assert!(PLAYBACK_SCRIPT.contains("wireMiniBrowser"));
-    assert!(PLAYBACK_SCRIPT.contains("setPlaybackState"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("mini-player-mode"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("wireMiniBrowser"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("setPlaybackState"));
     assert!(PLAYER_CSS.contains(".mini-player-dock"));
 }
 
 #[test]
 fn player_and_gallery_share_a_persistent_up_next_queue() {
-    assert!(PLAYBACK_SCRIPT.contains("rustdl:up-next:v1"));
-    assert!(PLAYBACK_SCRIPT.contains("data-control-next"));
-    assert!(PLAYBACK_SCRIPT.contains("Add to Up Next"));
-    assert!(PLAYBACK_SCRIPT.contains("Remove from Up Next"));
-    assert!(PLAYBACK_SCRIPT.contains("/__app/playback-order.json"));
-    assert!(PLAYBACK_SCRIPT.contains("nexttrack:advanceToNext"));
-    assert!(PLAYBACK_SCRIPT.contains("miniNext.addEventListener"));
-    assert!(PLAYBACK_SCRIPT.contains("data-clear-up-next"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("rustdl:up-next:v1"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("data-control-next"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("Add to Up Next"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("Remove from Up Next"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("/__app/playback-order.json"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("nexttrack:advanceToNext"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("miniNext.addEventListener"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("data-clear-up-next"));
     assert!(INDEX_CSS.contains(".playback-queue-status"));
 }
 
@@ -607,13 +660,13 @@ fn modern_controls_cover_anchor_scrubbing_media_session_and_queue() {
     assert!(!PLAYER_CSS.contains(".player-frame.controls-idle:not(:focus-within)"));
     assert!(PLAYER_CSS.contains(".scrub-preview"));
     assert!(PLAYER_CSS.contains(".download-boundary"));
-    assert!(PLAYBACK_SCRIPT.contains("navigator.mediaSession.setActionHandler"));
-    assert!(PLAYBACK_SCRIPT.contains("Waiting for download"));
-    assert!(PLAYBACK_SCRIPT.contains("event.preventDefault();event.stopPropagation()"));
-    assert!(PLAYBACK_SCRIPT.contains("setPointerCapture"));
-    assert!(PLAYBACK_SCRIPT.contains("seekFromPointer"));
-    assert!(PLAYBACK_SCRIPT.contains("card-popover"));
-    assert!(PLAYBACK_SCRIPT.contains("queue-mini"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("navigator.mediaSession.setActionHandler"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("Waiting for download"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("event.preventDefault();event.stopPropagation()"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("setPointerCapture"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("seekFromPointer"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("card-popover"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("queue-mini"));
 }
 
 #[test]
@@ -666,8 +719,8 @@ fn diagnostics_are_live_but_exclude_user_content() {
     let bridge = include_str!("../android/DiagnosticsBridge.java");
     assert!(INDEX_HTML.contains(r#"href="/diagnostics""#));
     assert!(html.contains("RustDLDiagnostics"));
-    assert!(html.contains("bridge.diagnostics()"));
-    assert!(html.contains("response.detail"));
+    assert!(include_str!("../assets/js/diagnostics.js").contains("bridge.diagnostics()"));
+    assert!(include_str!("../assets/js/diagnostics.js").contains("response.detail"));
     assert!(html.contains("Load average restricted by Android"));
     assert!(html.contains("copySnapshot"));
     assert!(html.contains(r#"aria-busy="true""#));
@@ -737,13 +790,13 @@ fn pairing_refresh_keeps_geometry_and_swaps_only_stable_fields() {
     assert!(PEER_CSS.contains(":root{view-transition-name:none}"));
     assert!(PEER_CSS.contains("animation-duration:100ms"));
     assert!(!PEER_CSS.contains("opacity:.55"));
-    assert!(PEER_PAIRING_SCRIPT.contains("event.preventDefault()"));
-    assert!(PEER_PAIRING_SCRIPT.contains("fetch('/peers/refresh',{cache:'no-store'})"));
-    assert!(PEER_PAIRING_SCRIPT.contains("response.json()"));
-    assert!(PEER_PAIRING_SCRIPT.contains("document.startViewTransition(swap)"));
-    assert!(PEER_PAIRING_SCRIPT.contains("outerHTML=next.qr"));
-    assert!(!PEER_PAIRING_SCRIPT.contains("DOMParser"));
-    assert!(!PEER_PAIRING_SCRIPT.contains("location.reload"));
+    assert!(SOURCE_PEER_PAIRING_SCRIPT.contains("event.preventDefault()"));
+    assert!(SOURCE_PEER_PAIRING_SCRIPT.contains("fetch('/peers/refresh',{cache:'no-store'})"));
+    assert!(SOURCE_PEER_PAIRING_SCRIPT.contains("response.json()"));
+    assert!(SOURCE_PEER_PAIRING_SCRIPT.contains("document.startViewTransition(swap)"));
+    assert!(SOURCE_PEER_PAIRING_SCRIPT.contains("outerHTML=next.qr"));
+    assert!(!SOURCE_PEER_PAIRING_SCRIPT.contains("DOMParser"));
+    assert!(!SOURCE_PEER_PAIRING_SCRIPT.contains("location.reload"));
 }
 
 #[test]
@@ -824,23 +877,23 @@ fn bulk_quality_options_expose_file_type_and_resolution() {
     let audio_option = local::discovery::render_quality_option("token", 2, 1, &audio);
     assert!(video_option.contains(r#"data-kind="video" data-height="720""#));
     assert!(audio_option.contains(r#"data-kind="audio""#));
-    assert!(BULK_QUALITY_SCRIPT.contains("below[0]||above[0]||videos[0]"));
-    assert!(BULK_QUALITY_SCRIPT.contains("value==='audio'"));
+    assert!(SOURCE_BULK_QUALITY_SCRIPT.contains("below[0]||above[0]||videos[0]"));
+    assert!(SOURCE_BULK_QUALITY_SCRIPT.contains("value==='audio'"));
 }
 
 #[test]
 fn gallery_search_and_filters_are_wired_to_media_and_folders() {
     assert!(INDEX_CSS.contains(".gallery-tools"));
-    assert!(PLAYBACK_SCRIPT.contains("syncGalleryFilter"));
-    assert!(PLAYBACK_SCRIPT.contains("filter==='playlists'&&playlist"));
-    assert!(PLAYBACK_SCRIPT.contains("filter==='audio'&&audio"));
-    assert!(PLAYBACK_SCRIPT.contains("filter==='downloading'&&downloading"));
-    assert!(PLAYBACK_SCRIPT.contains("entry.searchText"));
-    assert!(PLAYBACK_SCRIPT.contains("renderBatch"));
-    assert!(PLAYBACK_SCRIPT.contains("galleryEntries.forEach"));
-    assert!(PLAYBACK_SCRIPT.contains("gallery-card-actions"));
-    assert!(PLAYBACK_SCRIPT.contains("requestAnimationFrame"));
-    assert!(PLAYBACK_SCRIPT.contains("sessionStorage.setItem(stateKey"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("syncGalleryFilter"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("filter==='playlists'&&playlist"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("filter==='audio'&&audio"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("filter==='downloading'&&downloading"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("entry.searchText"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("renderBatch"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("galleryEntries.forEach"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("gallery-card-actions"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("requestAnimationFrame"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("sessionStorage.setItem(stateKey"));
 }
 
 #[test]
@@ -924,10 +977,10 @@ fn app_state_uses_stable_download_phase_names() {
 
 #[test]
 fn view_transitions_feature_detect_and_select_one_shared_thumbnail() {
-    assert!(VIEW_TRANSITION_SCRIPT.contains("document.startViewTransition"));
-    assert!(VIEW_TRANSITION_SCRIPT.contains("selectSharedElement"));
-    assert!(VIEW_TRANSITION_SCRIPT.contains("style.viewTransitionName='none'"));
-    assert!(PLAYBACK_SCRIPT.contains("dataset.viewTransitionName"));
+    assert!(SOURCE_VIEW_TRANSITION_SCRIPT.contains("document.startViewTransition"));
+    assert!(SOURCE_VIEW_TRANSITION_SCRIPT.contains("selectSharedElement"));
+    assert!(SOURCE_VIEW_TRANSITION_SCRIPT.contains("style.viewTransitionName='none'"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("dataset.viewTransitionName"));
 }
 
 #[test]
@@ -1106,4 +1159,35 @@ fn large_playlist_quality_and_post_import_keep_every_selection() {
         .unwrap()
         .remove(&token);
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+#[ignore = "explicit public-playlist network probe; requires RUSTDL_TEST_PLAYLIST_ID"]
+fn supplied_youtube_playlist_preview_live() {
+    let id = std::env::var("RUSTDL_TEST_PLAYLIST_ID").expect("supplied test playlist id");
+    assert!(local::youtube::valid_playlist_id(&id));
+    let client = super::external::http::build_client().unwrap();
+    let playlist = super::external::youtube::fetch_playlist_entries(&client, &id).unwrap();
+    let count = playlist.entries.len();
+    assert!(count > 0 && count <= super::external::youtube::MAX_PLAYLIST_ITEMS);
+    let unique = playlist
+        .entries
+        .iter()
+        .map(|e| e.video_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), count);
+    let session = local::discovery::PlaylistSession {
+        created: 0,
+        playlist_id: playlist.playlist_id,
+        title: playlist.title,
+        entries: playlist.entries,
+    };
+    let html =
+        local::discovery::render_playlist_selection("synthetic-live-preview", &session).unwrap();
+    assert!(html.contains(&format!("Loaded all {count} playlist entries")));
+    assert!(!html.contains("<label class=\"candidate\">"));
+    println!(
+        "live_playlist_entries={count} preview_html_bytes={} initial_card_nodes=0 downloads_started=0",
+        html.len()
+    );
 }

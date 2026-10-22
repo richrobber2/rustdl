@@ -110,7 +110,11 @@ pub(in super::super) fn prepare_playlist_picks(picks: &[String]) -> Result<Strin
     if selected.is_empty() {
         return Err("Select at least one playlist video".to_owned());
     }
-    selected.sort_by_key(|(_, membership)| (membership.playlist_id.clone(), membership.position));
+    selected.sort_by(|(_, left), (_, right)| {
+        left.playlist_id
+            .cmp(&right.playlist_id)
+            .then_with(|| left.position.cmp(&right.position))
+    });
     workflows::playlist_resolution::start(selected)
 }
 

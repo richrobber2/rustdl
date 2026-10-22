@@ -117,7 +117,7 @@ pub(in super::super) fn respond_page(request: Request, token: &str) -> Result<()
             include_str!("../../assets/html/playlist-resolution.html"),
             token = local::html::escape_html(token),
             css = local::discovery::DISCOVERY_CSS,
-            script = include_str!("../../assets/js/playlist-resolution.js"),
+            script = include_js!("playlist-resolution.js"),
         ),
     )
 }

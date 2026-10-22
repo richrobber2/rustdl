@@ -86,8 +86,7 @@ pub(in super::super) fn args_peer_port() -> u16 {
 
 pub(in super::super) const PEER_CSS: &str = include_str!("../../assets/css/peers.css");
 
-pub(in super::super) const PEER_PAIRING_SCRIPT: &str =
-    include_str!("../../assets/js/peer-pairing.js");
+pub(in super::super) const PEER_PAIRING_SCRIPT: &str = include_js!("peer-pairing.js");
 
 #[derive(Serialize)]
 pub(in super::super) struct PeerPairingView {
@@ -219,7 +218,7 @@ pub(in super::super) fn respond_peer_connected_page(
             receiver_address = receiver_address,
             item_count = item_count,
             dev_reload = dev_reload,
-            page_script = include_str!("../../assets/js/transfer-library.js")
+            page_script = include_js!("transfer-library.js")
                 .replace("__RUSTDL_RECEIVER_LABEL__", &format!("{}", receiver_label)),
             rows = rows
         )

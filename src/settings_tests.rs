@@ -9,7 +9,7 @@ fn settings_are_persistent_apk_local_and_scoped() {
     assert!(INDEX_HTML.contains(r#"href="/settings""#));
     assert!(html.contains("Completed download folder"));
     assert!(html.contains("RustDLSettings"));
-    assert!(html.contains("bridge.save"));
+    assert!(include_str!("../assets/js/settings.js").contains("bridge.save"));
     assert!(html.contains("Restore defaults"));
     assert!(html.contains("Existing exports stay where they are"));
     assert!(html.contains("Moving space background"));

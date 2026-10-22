@@ -15,6 +15,8 @@
       for(const article of template.content.children){
         if(article.tagName!=='ARTICLE'||!/^version-\d+-\d+-\d+$/.test(article.id)||!Number.isInteger(Number(article.dataset.releaseIndex)))throw new Error('Invalid release entry');
       }
+      // Snapshot the live collection: insertBefore moves children out of the fragment.
+      // eslint-disable-next-line unicorn/no-useless-spread
       for(const article of [...template.content.children]){
         if(document.getElementById(article.id))continue;
         const index=Number(article.dataset.releaseIndex);

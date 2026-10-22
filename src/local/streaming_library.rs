@@ -483,7 +483,7 @@ pub(crate) fn render_watchlist(entries: &[WatchlistEntry], token: &str) -> Strin
             include_str!("../../assets/html/watchlist.html"),
             LIBRARY_CSS = LIBRARY_CSS,
             entry_count = entry_count,
-            page_script = include_str!("../../assets/js/watchlist.js"),
+            page_script = include_js!("watchlist.js"),
             cards = cards
         )
     }
@@ -648,7 +648,7 @@ pub(crate) fn render_calendar(
             include_str!("../../assets/html/calendar.html"),
             LIBRARY_CSS = LIBRARY_CSS,
             new_status_suffix = new_status_suffix,
-            page_script = include_str!("../../assets/js/calendar.js"),
+            page_script = include_js!("calendar.js"),
             day_nav = day_nav,
             new_count = new_count,
             sections = sections,
@@ -813,8 +813,11 @@ mod tests {
         let library = local::streaming_library::load(&directory).unwrap();
         assert_eq!(library.entries.len(), 1);
         let html = local::streaming_library::render_watchlist(&library.entries, "test-token");
-        assert!(html.contains("form.getAttribute('action')"));
-        assert!(!html.contains("fetch(form.action"));
+        assert!(html.contains("action=\"/__app/watchlist\""));
+        assert!(
+            include_str!("../../assets/js/watchlist.js").contains("form.getAttribute('action')")
+        );
+        assert!(!include_str!("../../assets/js/watchlist.js").contains("fetch(form.action"));
         assert!(!local::streaming_library::remove(&directory, url).unwrap());
         assert!(
             local::streaming_library::load(&directory)

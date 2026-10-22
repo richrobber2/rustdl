@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {JSDOM} = require('jsdom');
 const root = path.resolve(__dirname, '../..');
-const script = fs.readFileSync(path.join(root, 'assets/js/playback.js'), 'utf8');
+const script = require('./read-script.cjs')('playback.js');
 const template = fs.readFileSync(path.join(root, 'assets/html/gallery.html'), 'utf8');
 const item = id => ({href:'/watch/synthetic-'+id+'.m4a', filename:'synthetic-'+id+'.m4a',state:'Ready',title:'Synthetic audio',subtitle:String(id),kind:'audio',thumbnail:null,transitionName:null});
 const page = entries => template.replace(/\{(library_heading|collection_nav|gallery_json|initial_cards|library_summary)\}/g, (_,key)=>({library_heading:'Synthetic library',collection_nav:'',gallery_json:JSON.stringify(entries),initial_cards:'',library_summary:entries.length+' media items'})[key]);

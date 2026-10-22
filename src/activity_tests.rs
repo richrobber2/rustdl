@@ -10,8 +10,8 @@ fn activity_center_is_live_filterable_and_actionable() {
     assert!(html.contains("/__app/activity.json"));
     assert!(html.contains("rustdl:state"));
     assert!(html.contains("setInterval"));
-    assert!(html.contains("textContent=item.filename"));
-    assert!(html.contains("'/watch/'"));
+    assert!(include_str!("../assets/js/activity.js").contains("textContent=item.filename"));
+    assert!(html.contains("/watch/"));
 }
 
 #[test]

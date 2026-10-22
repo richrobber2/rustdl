@@ -462,6 +462,77 @@ npm --prefix tests/ui install
 npm --prefix tests/ui test
 ```
 
+JavaScript correctness checks use Oxlint 1.89.0 and run alongside these tests in CI:
+
+```sh
+npm --prefix tests/ui ci
+npm --prefix tests/ui run lint
+```
+
+Oxlint is a development dependency and is not bundled in the app. On Android
+CPUs without LSE atomics, the published native binding may crash with an illegal
+instruction. Set `OXLINT_BIN` to a compatible standalone Oxlint executable to
+use the same configuration and checks without the Node binding:
+
+```sh
+OXLINT_BIN=/path/to/oxlint npm --prefix tests/ui run lint
+```
+
+For a local Android build from an Oxc checkout whose Oxlint version is 1.89.0, use the
+checkout's Rust toolchain and disable the Node binding and LSE instructions:
+
+```sh
+# Run in the Oxc checkout. One compiler job and disabled LTO limit build memory.
+CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+CARGO_PROFILE_RELEASE_OPT_LEVEL=1 RUSTFLAGS='-C target-cpu=generic -C target-feature=-lse' \
+CFLAGS=-march=armv8-a CXXFLAGS=-march=armv8-a \
+cargo build --locked --release -p oxlint --bin oxlint --no-default-features -j1
+```
+
+The executable is `target/release/oxlint` in that checkout.
+
+### Optional minified JavaScript builds
+
+For isolated Rust allocation measurements, see [Heap profiling](PERFORMANCE.md).
+
+For dependency, secret and targeted source security checks, see
+[Security checks](.security/README.md).
+
+Oxc 0.155.0 can minify the embedded UI scripts at build time. Install the pinned
+development tools, then enable the Cargo feature or the Android build option:
+
+```sh
+npm --prefix tests/ui ci
+cargo build --release --features minified-js
+# For an Android APK:
+RUSTDL_MINIFY_JS=1 make apk
+```
+
+For direct Cargo commands in Termux, set
+`BINDGEN_EXTRA_CLANG_ARGS=--target=aarch64-linux-android24` for QuickJS binding
+generation. The Android APK build script supplies this default automatically
+and retains explicit caller overrides.
+
+The build script generates assets inside Cargo's `OUT_DIR` and rebuilds them
+when JavaScript sources or tool configuration change. Ordinary builds copy the
+original scripts and do not require Node. Nothing runs a minifier in the app.
+Android uses the pinned WASI binding to avoid native CPU instruction requirements.
+An optional `OXC_MINIFY_BIN` override accepts the `oxc_minifier` example executable
+from the matching Oxc checkout (`--mangle --nospace`).
+
+Property names are retained for Android bridges and browser APIs. Generation
+checks syntax, preserves every `__RUSTDL_*__` marker and rejects inline script
+closing tags. Synthetic UI tests run against both source and generated scripts:
+
+```sh
+npm --prefix tests/ui run build:js
+RUSTDL_JS_TEST_DIR="$PWD/target/minified-js" npm --prefix tests/ui test
+```
+
+The size report is `target/minified-js/sizes.json`. The initial 20-script result
+is 96,897 bytes down to 63,747 bytes (34.2%); this measures script bytes, not app
+RAM usage or compressed APK size.
+
 ### Anime episode downloads
 
 Start an episode in the anime player, then tap **Download episode** next to the

@@ -182,21 +182,33 @@ pub(in super::super) fn fetch_playlist_entries(
 ) -> Result<YouTubePlaylist, Box<dyn Error>> {
     eprintln!("Loading all entries in YouTube playlist {playlist_id}...");
     let canonical = format!("https://www.youtube.com/playlist?list={playlist_id}");
-    let response = client.get(canonical).send()?.error_for_status()?;
-    let html = external::youtube::read_playlist_response(response)?;
-    let initial_data = local::youtube::initial_data(&html)?;
-    let data: serde_json::Value = serde_json::from_str(initial_data)?;
-    let title = local::youtube::playlist_title(&data).unwrap_or_else(|| {
+    let (page, api_key, client_version, client_name) = {
+        let response = client.get(canonical).send()?.error_for_status()?;
+        let html = external::youtube::read_playlist_response(response)?;
+        let initial_data = local::youtube::initial_data(&html)?;
+        let page = local::youtube_playlist::initial(&initial_data)?;
+        let api_key = local::youtube::config_string(&html, "INNERTUBE_API_KEY");
+        let client_version =
+            local::youtube::config_string(&html, "INNERTUBE_CONTEXT_CLIENT_VERSION");
+        let client_name = local::youtube::config_string(&html, "INNERTUBE_CLIENT_NAME")
+            .filter(|name| matches!(name.as_str(), "WEB" | "MWEB"))
+            .unwrap_or_else(|| "WEB".to_owned());
+        (page, api_key, client_version, client_name)
+    }; // Release the HTML and decoded page before requesting any continuation.
+    let title = page.title.unwrap_or_else(|| {
         format!(
             "YouTube playlist · {}",
             &playlist_id[..playlist_id.len().min(12)]
         )
     });
-    let (mut entries, mut continuation) = local::youtube::initial_playlist_entries(&data)?;
-    let api_key = local::youtube::config_string(&html, "INNERTUBE_API_KEY")
-        .ok_or("YouTube playlist API key was not found")?;
-    let client_version = local::youtube::config_string(&html, "INNERTUBE_CONTEXT_CLIENT_VERSION")
-        .ok_or("YouTube playlist client version was not found")?;
+    let mut entries = page.entries;
+    let mut continuation = page.continuation;
+    if entries.len() > MAX_PLAYLIST_ITEMS {
+        return Err(
+            format!("playlist exceeds the safety limit of {MAX_PLAYLIST_ITEMS} entries").into(),
+        );
+    }
+    let mut requested_tokens = HashSet::new();
     let mut seen = entries
         .iter()
         .map(|entry| entry.video_id.clone())
@@ -213,17 +225,29 @@ pub(in super::super) fn fetch_playlist_entries(
             .into());
         }
         eprintln!("Loading playlist page {}...", page + 1);
+        if !requested_tokens.insert(token.clone()) {
+            return Err("YouTube repeated a playlist continuation token".into());
+        }
+        let api_key = api_key
+            .as_deref()
+            .ok_or("YouTube playlist API key was not found")?;
+        let client_version = client_version
+            .as_deref()
+            .ok_or("YouTube playlist client version was not found")?;
         let mut endpoint = Url::parse("https://www.youtube.com/youtubei/v1/browse")?;
-        endpoint.query_pairs_mut().append_pair("key", &api_key);
+        endpoint.query_pairs_mut().append_pair("key", api_key);
         let response = client
             .post(endpoint)
             .header("Content-Type", "application/json")
-            .header("X-YouTube-Client-Name", "1")
-            .header("X-YouTube-Client-Version", &client_version)
+            .header(
+                "X-YouTube-Client-Name",
+                if client_name == "MWEB" { "2" } else { "1" },
+            )
+            .header("X-YouTube-Client-Version", client_version)
             .json(&serde_json::json!({
                 "context": {
                     "client": {
-                        "clientName": "WEB",
+                        "clientName": client_name,
                         "clientVersion": client_version
                     }
                 },
@@ -232,14 +256,20 @@ pub(in super::super) fn fetch_playlist_entries(
             .send()?
             .error_for_status()?;
         let body = external::youtube::read_playlist_response(response)?;
-        let page_data: serde_json::Value = serde_json::from_str(&body)?;
-        let (page_entries, next) = local::youtube::continuation_playlist_entries(&page_data)?;
-        for entry in page_entries {
-            if seen.insert(entry.video_id.clone()) {
+        let page = local::youtube_playlist::continuation(&body)?;
+        for entry in page.entries {
+            if !seen.contains(&entry.video_id) {
+                if entries.len() >= MAX_PLAYLIST_ITEMS {
+                    return Err(format!(
+                        "playlist exceeds the safety limit of {MAX_PLAYLIST_ITEMS} entries"
+                    )
+                    .into());
+                }
+                seen.insert(entry.video_id.clone());
                 entries.push(entry);
             }
         }
-        continuation = next;
+        continuation = page.continuation;
     }
     if continuation.is_some() {
         return Err(

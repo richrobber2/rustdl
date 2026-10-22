@@ -24,69 +24,61 @@ pub(in super::super) fn category_rank(category: &str) -> u8 {
     }
 }
 
+// Count the full queue, but copy only the rows that can reach the response.
+// Select/sort borrowed entries while locked; JSON construction uses owned rows
+// after the guard is released, avoiding resolver-data copies for omitted jobs.
+fn bounded_jobs<T: Clone>(
+    jobs: &HashMap<String, T>,
+    limit: usize,
+    category: impl Fn(&T) -> &'static str,
+) -> (Vec<(String, T)>, [u64; 3]) {
+    let mut counts = [0_u64; 3];
+    let mut ordered = Vec::with_capacity(jobs.len());
+    for (filename, job) in jobs {
+        if !local::media::valid_video_filename(filename) {
+            continue;
+        }
+        counts[category_rank(category(job)) as usize] += 1;
+        ordered.push((filename, job));
+    }
+    let compare = |left: &(&String, &T), right: &(&String, &T)| {
+        category_rank(category(left.1))
+            .cmp(&category_rank(category(right.1)))
+            .then_with(|| right.0.cmp(left.0))
+    };
+    if ordered.len() > limit {
+        ordered.select_nth_unstable_by(limit, &compare);
+        ordered.truncate(limit);
+    }
+    ordered.sort_unstable_by(compare);
+    let visible = ordered
+        .into_iter()
+        .map(|(filename, job)| (filename.clone(), job.clone()))
+        .collect();
+    (visible, counts)
+}
+
 pub(crate) fn snapshot() -> serde_json::Value {
     let tuning = local::runtime::runtime_tuning();
-    let mut downloads = local::queue::download_jobs()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .iter()
-        .filter(|(filename, _)| local::media::valid_video_filename(filename))
-        .map(|(filename, job)| (filename.clone(), job.clone()))
-        .collect::<Vec<_>>();
-    downloads.sort_unstable_by(|left, right| {
-        local::activity_state::category_rank(local::activity_state::download_category(left.1.phase))
-            .cmp(&local::activity_state::category_rank(
-                local::activity_state::download_category(right.1.phase),
-            ))
-            .then_with(|| right.0.cmp(&left.0))
-    });
-
-    let mut transfers = PEER_SEND_JOBS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .iter()
-        .filter(|(filename, _)| local::media::valid_video_filename(filename))
-        .map(|(filename, job)| (filename.clone(), job.clone()))
-        .collect::<Vec<_>>();
-    transfers.sort_unstable_by(|left, right| {
-        let left_category = if left.1.phase == "failed" {
-            "issue"
-        } else if left.1.phase == "ready" {
-            "complete"
-        } else {
-            "active"
-        };
-        let right_category = if right.1.phase == "failed" {
-            "issue"
-        } else if right.1.phase == "ready" {
-            "complete"
-        } else {
-            "active"
-        };
-        local::activity_state::category_rank(left_category)
-            .cmp(&local::activity_state::category_rank(right_category))
-            .then_with(|| right.0.cmp(&left.0))
-    });
-
-    let download_counts = downloads.iter().fold([0_u64; 3], |mut counts, (_, job)| {
-        match local::activity_state::download_category(job.phase) {
-            "active" => counts[0] += 1,
-            "issue" => counts[1] += 1,
-            _ => counts[2] += 1,
-        }
-        counts
-    });
-    let transfer_counts = transfers.iter().fold([0_u64; 3], |mut counts, (_, job)| {
-        if job.phase == "failed" {
-            counts[1] += 1;
-        } else if job.phase == "ready" {
-            counts[2] += 1;
-        } else {
-            counts[0] += 1;
-        }
-        counts
-    });
+    let (downloads, download_counts) = bounded_jobs(
+        &local::queue::download_jobs()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        60,
+        |job| download_category(job.phase),
+    );
+    let (transfers, transfer_counts) = bounded_jobs(
+        &PEER_SEND_JOBS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        30,
+        |job| match job.phase.as_str() {
+            "failed" => "issue",
+            "ready" => "complete",
+            _ => "active",
+        },
+    );
     let free_bytes = if tuning.free_bytes == u64::MAX {
         serde_json::Value::Null
     } else {
@@ -174,4 +166,76 @@ pub(crate) fn respond_page(request: Request) -> Result<(), Box<dyn Error>> {
     .with_header(local::html::header("X-Content-Type-Options", "nosniff"));
     request.respond(response)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct TrackedJob {
+        category: &'static str,
+        clones: Arc<AtomicUsize>,
+    }
+
+    impl Clone for TrackedJob {
+        fn clone(&self) -> Self {
+            self.clones.fetch_add(1, Ordering::Relaxed);
+            Self {
+                category: self.category,
+                clones: Arc::clone(&self.clones),
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_snapshot_preserves_full_counts_order_and_only_clones_visible_jobs() {
+        let clones = Arc::new(AtomicUsize::new(0));
+        let mut jobs = HashMap::new();
+        for i in 0..503 {
+            jobs.insert(
+                format!("{i:05}-1.mp4"),
+                TrackedJob {
+                    category: ["active", "issue", "complete"][i % 3],
+                    clones: Arc::clone(&clones),
+                },
+            );
+        }
+        for filename in ["notes.txt", "../invalid.mp4"] {
+            jobs.insert(
+                filename.to_owned(),
+                TrackedJob {
+                    category: "active",
+                    clones: Arc::clone(&clones),
+                },
+            );
+        }
+        let expected: Vec<_> = (0..3)
+            .flat_map(|category| {
+                (0..503)
+                    .rev()
+                    .filter(move |i| i % 3 == category)
+                    .map(|i| format!("{i:05}-1.mp4"))
+            })
+            .collect();
+        for limit in [0, 1, 29, 30, 59, 60, 503, 600] {
+            clones.store(0, Ordering::Relaxed);
+            let (rows, counts) = bounded_jobs(&jobs, limit, |job| job.category);
+            assert_eq!(counts, [168, 168, 167]);
+            assert_eq!(rows.len(), limit.min(503));
+            assert_eq!(clones.load(Ordering::Relaxed), rows.len());
+            assert_eq!(
+                rows.iter()
+                    .map(|(filename, _)| filename)
+                    .collect::<Vec<_>>(),
+                expected.iter().take(limit).collect::<Vec<_>>()
+            );
+        }
+        let (rows, counts) = bounded_jobs(&HashMap::<String, TrackedJob>::new(), 60, |job| {
+            job.category
+        });
+        assert!(rows.is_empty());
+        assert_eq!(counts, [0; 3]);
+    }
 }

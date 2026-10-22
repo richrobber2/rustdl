@@ -1,9 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const fs=require('node:fs');
-const path=require('node:path');
 const {JSDOM}=require('jsdom');
-const source=fs.readFileSync(path.resolve(__dirname,'../../assets/js/appearance.js'),'utf8');
+const source=require('./read-script.cjs')('appearance.js');
 test('parallax coalesces scroll updates, stays within the image margin, and stops when disabled',async()=>{
  const dom=new JSDOM('<!doctype html><html data-background="rainy-city" data-theme="light"><body><main>Gallery</main></body></html>',{url:'http://localhost',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window,root=w.document.documentElement,frames=new Map();let next=0,hidden=false;
@@ -42,7 +40,11 @@ test('parallax coalesces scroll updates, stays within the image margin, and stop
 
 test('sunrise plays locally, reverses for sunset, and cancels for rapid toggles and reduced motion',async()=>{
  const dom=new JSDOM('<html data-background="rainy-city" data-theme="dark"><body></body></html>',{url:'http://localhost',runScripts:'outside-only',pretendToBeVisual:true});
- const w=dom.window,root=w.document.documentElement,records=[];
+ const w=dom.window,root=w.document.documentElement,records=[],timers=new Map();
+ let now=0,nextTimer=0;
+ w.setTimeout=(callback,delay)=>{timers.set(++nextTimer,{callback,at:now+delay});return nextTimer};
+ w.clearTimeout=id=>timers.delete(id);
+ const advance=ms=>{now+=ms;for(const [id,timer]of timers)if(timer.at<=now){timers.delete(id);timer.callback()}};
  const motion={matches:false,addEventListener(_event,fn){this.changed=fn}};
  w.matchMedia=q=>q.includes('reduced-motion')?motion:{matches:false,addEventListener(){}};
  for(let i=1;i<=12;i++)root.style.setProperty('--rustdl-sunrise-'+i,`url("/frame-${i}.webp")`);
@@ -55,21 +57,40 @@ test('sunrise plays locally, reverses for sunset, and cancels for rapid toggles 
  w.eval(source);w.document.dispatchEvent(new w.Event('DOMContentLoaded',{bubbles:true}));
  const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve()};
  w.RustDLTheme.apply('light',true,false,false);await settle();
- assert.equal(loads,12);assert.equal(records.length,13);
+ assert.equal(loads,12);assert.equal(records.length,2);assert.equal(timers.size,11);
  assert.match(records[0].element.style.backgroundImage,/frame-1/);
- assert.match(records[11].element.style.backgroundImage,/frame-12/);
+ const container=w.document.querySelector('.rustdl-sunrise');
+ advance(280);advance(280);assert.equal(container.childElementCount,3);
+ records[2].finish();await settle();assert.equal(container.childElementCount,2);
+ assert.equal(container.style.backgroundImage,'none');
+ // Deliver the remaining timers in one burst, as after a busy main thread.
+ advance(2520);assert.equal(timers.size,0);assert.equal(container.childElementCount,3);
+ assert.match(container.lastElementChild.style.backgroundImage,/frame-12/);
+ assert.ok(records.filter(r=>r.element.parentNode!==container&&r.element!==container).every(r=>r.cancelled));
+ records.at(-1).finish();await settle();assert.equal(container.childElementCount,1);
+ const forward=records.slice();
  w.RustDLTheme.apply('dark',true,false,false);await settle();
- assert.ok(records.slice(0,13).every(r=>r.cancelled));assert.equal(loads,12);
- assert.match(records[13].element.style.backgroundImage,/frame-12/);
- assert.match(records[24].element.style.backgroundImage,/frame-1/);
- records[25].finish();await settle();assert.equal(w.document.querySelector('.rustdl-sunrise'),null);
+ assert.ok(forward.every(r=>r.cancelled));assert.equal(loads,12);
+ const reverseStart=records.length-2;
+ assert.match(records[reverseStart].element.style.backgroundImage,/frame-12/);
+ const reverseEnd=records.at(-1);
+ forward[1].finish();await settle();assert.ok(w.document.querySelector('.rustdl-sunrise'));assert.equal(timers.size,11);
+ advance(3080);assert.match(w.document.querySelector('.rustdl-sunrise').lastElementChild.style.backgroundImage,/frame-1/);
+ reverseEnd.finish();await settle();assert.equal(w.document.querySelector('.rustdl-sunrise'),null);assert.equal(timers.size,0);
  w.RustDLTheme.apply('light',true,false,false);await settle();
+ const staleEnd=records.at(-1);
  w.RustDLTheme.apply('light',true,false,false,'rainy-city',true);await settle();
- assert.equal(w.document.querySelector('.rustdl-sunrise'),null);assert.equal(root.dataset.cityParallax,'off');
+ assert.equal(w.document.querySelector('.rustdl-sunrise'),null);assert.equal(root.dataset.cityParallax,'off');assert.equal(timers.size,0);
+ staleEnd.finish();await settle();advance(5000);assert.equal(w.document.querySelector('.rustdl-sunrise'),null);
  const pausedCount=records.length;w.RustDLTheme.apply('dark',true,false,false);await settle();assert.equal(records.length,pausedCount);
  w.RustDLTheme.apply('dark',true,false,false,'rainy-city',false);assert.equal(root.dataset.cityParallax,'on');
  w.RustDLTheme.apply('light',true,false,false);await settle();
- motion.matches=true;motion.changed();assert.equal(w.document.querySelector('.rustdl-sunrise'),null);
+ motion.matches=true;motion.changed();assert.equal(w.document.querySelector('.rustdl-sunrise'),null);assert.equal(timers.size,0);
  const count=records.length;w.RustDLTheme.apply('dark',true,false,false);await settle();assert.equal(records.length,count);
+ motion.matches=false;motion.changed();
+ w.RustDLTheme.apply('light',true,false,false);await settle();assert.equal(timers.size,11);
+ w.dispatchEvent(new w.Event('pagehide'));assert.equal(timers.size,0);assert.equal(w.document.querySelector('.rustdl-sunrise'),null);
+ w.RustDLTheme.apply('dark',true,false,false);await settle();assert.equal(timers.size,11);
+ w.document.body.classList.add('pip');await settle();assert.equal(timers.size,0);assert.equal(w.document.querySelector('.rustdl-sunrise'),null);
  dom.window.close();
 });

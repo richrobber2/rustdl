@@ -216,7 +216,7 @@ pub(crate) fn command(command: &str, payload: &str, privacy: bool) -> String {
                 {
                     let playlist = external::youtube::fetch_playlist_entries(&client, &playlist_id)
                         .map_err(|_| "Could not load this playlist. Try again.")?;
-                    let token = discovery::store_playlist_session(&playlist);
+                    let (token, _) = discovery::store_playlist_session(playlist);
                     return page(&token, 0, privacy);
                 }
                 let candidates = workflows::discovery::discover_videos(&client, &request.source)

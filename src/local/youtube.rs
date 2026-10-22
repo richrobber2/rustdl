@@ -2,6 +2,7 @@
 
 use super::super::local;
 use reqwest::Url;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,7 +22,7 @@ pub(in super::super) fn url_is_fresh(url: &str) -> bool {
         .is_some_and(|expires| expires > now.saturating_add(5 * 60))
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(in super::super) struct YouTubePlaylistEntry {
     pub(in super::super) video_id: String,
     pub(in super::super) title: String,
@@ -50,12 +51,84 @@ pub(in super::super) fn playlist_title(data: &serde_json::Value) -> Option<Strin
     .map(|title| local::format::truncate_text(title, 120))
 }
 
-pub(in super::super) fn initial_data(html: &str) -> Result<&str, Box<dyn Error>> {
-    const MARKERS: [&str; 2] = ["var ytInitialData = ", "window[\"ytInitialData\"] = "];
-    MARKERS
-        .into_iter()
-        .find_map(|marker| local::youtube::json_object_after(html, marker))
-        .ok_or_else(|| "YouTube playlist data was not found".into())
+pub(in super::super) fn initial_data(html: &str) -> Result<Cow<'_, str>, Box<dyn Error>> {
+    for marker in [
+        "var ytInitialData",
+        "window[\"ytInitialData\"]",
+        "window['ytInitialData']",
+    ] {
+        let mut remaining = html;
+        while let Some(index) = remaining.find(marker) {
+            remaining = &remaining[index + marker.len()..];
+            let Some(value) = remaining.trim_start().strip_prefix('=') else {
+                continue;
+            };
+            let value = value.trim_start();
+            if value.starts_with('{') {
+                if let Some(json) = json_object_after(value, "") {
+                    return Ok(Cow::Borrowed(json));
+                }
+            } else if value.starts_with(['\'', '"']) {
+                return decode_initial_string(value).map(Cow::Owned);
+            }
+        }
+    }
+    Err("YouTube playlist data was not found".into())
+}
+
+// Convert only a JavaScript string literal to JSON string syntax. Never execute
+// provider scripts; serde handles UTF-16 surrogate pairs and rejects bad escapes.
+fn decode_initial_string(input: &str) -> Result<String, Box<dyn Error>> {
+    let quote = input.chars().next().ok_or("missing data string")?;
+    let mut chars = input[quote.len_utf8()..].chars().peekable();
+    let mut json = String::with_capacity(input.len().min(16 * 1024));
+    json.push('"');
+    while let Some(ch) = chars.next() {
+        if ch == quote {
+            json.push('"');
+            return Ok(serde_json::from_str(&json)?);
+        }
+        match ch {
+            '\\' => match chars.next().ok_or("unterminated data escape")? {
+                'x' => {
+                    let a = chars
+                        .next()
+                        .filter(char::is_ascii_hexdigit)
+                        .ok_or("invalid hex escape")?;
+                    let b = chars
+                        .next()
+                        .filter(char::is_ascii_hexdigit)
+                        .ok_or("invalid hex escape")?;
+                    json.push_str("\\u00");
+                    json.push(a);
+                    json.push(b);
+                }
+                '\'' => json.push('\''),
+                '\n' => {}
+                '\r' => {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                }
+                'v' => json.push_str("\\u000b"),
+                '0' => {
+                    if chars.peek().is_some_and(char::is_ascii_digit) {
+                        return Err("octal escape is unsupported".into());
+                    }
+                    json.push_str("\\u0000");
+                }
+                ch @ ('"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') => {
+                    json.push('\\');
+                    json.push(ch);
+                }
+                _ => return Err("unsupported data escape".into()),
+            },
+            '"' => json.push_str("\\\""),
+            '\n' | '\r' => return Err("unescaped newline in data string".into()),
+            _ => json.push(ch),
+        }
+    }
+    Err("unterminated playlist data string".into())
 }
 
 pub(in super::super) fn config_string(html: &str, key: &str) -> Option<String> {
@@ -72,6 +145,7 @@ pub(in super::super) fn initial_playlist_entries(
 ) -> Result<(Vec<YouTubePlaylistEntry>, Option<String>), Box<dyn Error>> {
     let tabs = data
         .pointer("/contents/twoColumnBrowseResultsRenderer/tabs")
+        .or_else(|| data.pointer("/contents/singleColumnBrowseResultsRenderer/tabs"))
         .and_then(serde_json::Value::as_array)
         .ok_or("YouTube playlist tabs were not found")?;
     let mut entries = Vec::new();

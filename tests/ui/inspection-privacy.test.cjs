@@ -4,7 +4,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {JSDOM}=require('jsdom');
 const root=path.resolve(__dirname,'../..');
-const boot=fs.readFileSync(path.join(root,'assets/js/appearance-boot.js'),'utf8');
+const boot=require('./read-script.cjs')('appearance-boot.js');
 const css=fs.readFileSync(path.join(root,'assets/css/appearance.css'),'utf8');
 function page(url,enabled=true) {
   const dom=new JSDOM(`<style>${css}</style><main><span class="media-title">Synthetic title</span><span class="media-file">synthetic.mp4</span><div class="media-thumb"><img></div><video></video><button>Pause</button><span class="size">10 MB</span></main>`,{url,runScripts:'outside-only'});

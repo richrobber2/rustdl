@@ -1,0 +1,9 @@
+{
+  "$schema": "./tests/ui/node_modules/oxlint/configuration_schema.json",
+  "env": {
+    "browser": true
+  },
+  "rules": {
+    "no-unused-vars": ["warn", { "caughtErrorsIgnorePattern": "^_" }]
+  }
+}

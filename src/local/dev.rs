@@ -120,6 +120,6 @@ pub(in super::super) fn dev_reload_script() -> String {
     };
     format!(
         "<script>{}</script>",
-        include_str!("../../assets/js/dev-reload.js").replace("__RUSTDL_VERSION_TOKEN__", &token)
+        include_js!("dev-reload.js").replace("__RUSTDL_VERSION_TOKEN__", &token)
     )
 }

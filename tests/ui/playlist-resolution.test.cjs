@@ -5,7 +5,7 @@ const path=require('node:path');
 const vm=require('node:vm');
 const {JSDOM}=require('jsdom');
 const root=path.join(__dirname,'../..');
-const source=fs.readFileSync(path.join(root,'assets/js/playlist-resolution.js'),'utf8');
+const source=require('./read-script.cjs')('playlist-resolution.js');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(responses){
  const html=fs.readFileSync(path.join(root,'assets/html/playlist-resolution.html'),'utf8').replace(/<style>[\s\S]*?<\/style>/,'').replaceAll('{token}','test-token').replace('{script}','');

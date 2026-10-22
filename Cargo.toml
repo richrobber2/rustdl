@@ -9,8 +9,18 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 dev = []
+minified-js = []
+heap-profile = ["dep:dhat"]
+
+[[bin]]
+name = "rustdl-heap-profile"
+path = "src/heap_profile_main.rs"
+required-features = ["heap-profile"]
+test = false
+bench = false
 
 [dependencies]
+dhat = { version = "=0.3.3", optional = true }
 blake3 = "1.8"
 chacha20poly1305 = "0.10"
 qrcode = { version = "0.14", default-features = false }
@@ -31,3 +41,8 @@ rquickjs-sys = { version = "0.9.0", features = ["bindgen"] }
 lto = false
 strip = true
 codegen-units = 8
+
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = false

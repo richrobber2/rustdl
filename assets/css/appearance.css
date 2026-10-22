@@ -102,7 +102,8 @@
   }
   body { isolation: isolate; }
   body::after {
-    content: ""; position: fixed; z-index: -1; inset: -45vh -45vw; pointer-events: none; opacity: var(--rustdl-space-opacity);
+    /* 12% overscan covers the drift's largest shift: 7% of 124% = 8.68%. */
+    content: ""; position: fixed; z-index: -1; inset: -12vh -12vw; pointer-events: none; opacity: var(--rustdl-space-opacity);
     background-image:
       radial-gradient(circle, var(--rustdl-space-star) 0 1px, transparent 1.5px),
       radial-gradient(circle, var(--rustdl-space-glow) 0 1.4px, transparent 2px),
@@ -249,7 +250,7 @@
   :root[data-theme] .release-actions { border-color: var(--rustdl-surface-border) !important; }
   :root[data-theme] .goto { color: var(--rustdl-accent) !important; border-color: var(--rustdl-accent-border) !important; background: var(--rustdl-accent-soft) !important; }
   :root[data-theme] .media-card { overflow: hidden; }
-  @media (prefers-reduced-motion: reduce) { body::after { animation: none; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { body::after { animation: none; transform: none; will-change: auto; } }
 
 /* Shared form sizing for narrow windows and enlarged Android text. */
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
@@ -350,7 +351,7 @@ button { white-space: normal; }
   transition-duration:.01ms !important;
   transition-delay:0s !important;
 }
-:root[data-reduce-motion="on"] body::after { animation:none !important;transform:none !important; }
+:root[data-reduce-motion="on"] body::after { animation:none !important;transform:none !important;will-change:auto !important; }
 :root[data-reduce-motion="on"]::view-transition-group(*),
 :root[data-reduce-motion="on"]::view-transition-old(*),
 :root[data-reduce-motion="on"]::view-transition-new(*) { animation:none !important; }

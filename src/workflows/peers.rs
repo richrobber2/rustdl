@@ -186,7 +186,7 @@ pub(in super::super) fn start_peer_send(
             PEER_CSS = PEER_CSS,
             display_filename = display_filename,
             dev_reload = dev_reload,
-            page_script = include_str!("../../assets/js/transfer-progress.js")
+            page_script = include_js!("transfer-progress.js")
                 .replace("__RUSTDL_FILENAME_JSON__", &format!("{}", filename_json))
         )
     };

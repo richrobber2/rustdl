@@ -8,6 +8,21 @@ permissions:
   contents: read
 
 jobs:
+  javascript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tests/ui/package-lock.json
+      - run: npm --prefix tests/ui ci
+      - run: npm --prefix tests/ui run lint
+      - run: npm --prefix tests/ui test
+      - run: npm --prefix tests/ui run build:js
+      - name: Test generated JavaScript with synthetic UI fixtures
+        run: RUSTDL_JS_TEST_DIR="$PWD/target/minified-js" npm --prefix tests/ui test
   changelog:
     runs-on: ubuntu-latest
     steps:
@@ -29,12 +44,20 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tests/ui/package-lock.json
+      - run: npm --prefix tests/ui ci
       - name: Check formatting
         run: |
           cargo fmt --check
           cargo fmt --manifest-path native-ui/Cargo.toml --check
       - name: Test
         run: cargo test --release
+      - name: Test with minified embedded JavaScript
+        run: cargo test --release --features minified-js
       - name: Fetch pinned Android platform jar
         run: |
           url=https://raw.githubusercontent.com/Sable/android-platforms/1e98db1a199e8f7f85541af26bfc27019501b132/android-35/android.jar

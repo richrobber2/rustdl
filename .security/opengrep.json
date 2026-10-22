@@ -1,0 +1,109 @@
+{
+  "rules": [
+    {
+      "id": "rustdl.android.tls-error-bypass",
+      "languages": [
+        "java"
+      ],
+      "severity": "ERROR",
+      "message": "TLS certificate errors must be rejected, not bypassed.",
+      "patterns": [
+        {
+          "pattern-inside": "public void onReceivedSslError(..., SslErrorHandler $HANDLER, ...) { ... }"
+        },
+        {
+          "pattern": "$HANDLER.proceed()"
+        }
+      ]
+    },
+    {
+      "id": "rustdl.android.universal-file-access",
+      "languages": [
+        "java"
+      ],
+      "severity": "ERROR",
+      "message": "JavaScript in file URLs must not receive universal access.",
+      "pattern": "$SETTINGS.setAllowUniversalAccessFromFileURLs(true)"
+    },
+    {
+      "id": "rustdl.android.hostname-verifier-bypass",
+      "languages": [
+        "java"
+      ],
+      "severity": "ERROR",
+      "message": "A hostname verifier must verify the peer hostname.",
+      "pattern": "public boolean verify(String $HOST, SSLSession $SESSION) { return true; }"
+    },
+    {
+      "id": "rustdl.js.dynamic-code",
+      "languages": [
+        "javascript"
+      ],
+      "severity": "ERROR",
+      "message": "Production UI scripts must not evaluate strings.",
+      "pattern-either": [
+        {
+          "pattern": "eval(...)"
+        },
+        {
+          "pattern": "window.eval(...)"
+        },
+        {
+          "pattern": "new Function(...)"
+        }
+      ]
+    },
+    {
+      "id": "rustdl.js.url-to-html",
+      "languages": [
+        "javascript"
+      ],
+      "severity": "ERROR",
+      "message": "URL-derived input reaches an HTML sink. Use textContent or validated DOM construction.",
+      "mode": "taint",
+      "pattern-sources": [
+        {
+          "pattern": "location.search"
+        },
+        {
+          "pattern": "location.hash"
+        },
+        {
+          "pattern": "window.location.search"
+        },
+        {
+          "pattern": "window.location.hash"
+        }
+      ],
+      "pattern-sinks": [
+        {
+          "pattern": "$ELEMENT.innerHTML = $INPUT"
+        },
+        {
+          "pattern": "$ELEMENT.insertAdjacentHTML($POSITION, $INPUT)"
+        }
+      ],
+      "pattern-sanitizers": [
+        {
+          "pattern": "DOMPurify.sanitize(...)"
+        }
+      ]
+    },
+    {
+      "id": "rustdl.rust.formatted-shell-command",
+      "languages": [
+        "rust"
+      ],
+      "severity": "WARNING",
+      "message": "Review interpolated shell commands. Prefer a program and separate arguments over sh -c.",
+      "pattern-either": [
+        {
+          "pattern": "Command::new(\"sh\").arg(\"-c\").arg(format!(...))"
+        },
+        {
+          "pattern": "std::process::Command::new(\"sh\").arg(\"-c\").arg(format!(...))"
+        }
+      ]
+    }
+  ]
+}

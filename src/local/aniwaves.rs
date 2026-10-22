@@ -927,7 +927,7 @@ pub(crate) fn render_catalog(
             total_pages = total_pages,
             next_link = next_link,
             page_css = include_str!("../../assets/css/streaming-catalog.css"),
-            page_script = include_str!("../../assets/js/streaming-catalog.js"),
+            page_script = include_js!("streaming-catalog.js"),
             cards = cards,
             description = description,
             eyebrow = eyebrow,
@@ -984,8 +984,13 @@ mod tests {
         assert!(html.contains("section=updated"));
         assert!(html.contains("/streaming/watchlist"));
         assert!(html.contains("/__app/watchlist"));
-        assert!(html.contains("form.getAttribute('action')"));
-        assert!(!html.contains("fetch(form.action"));
+        assert!(
+            include_str!("../../assets/js/streaming-catalog.js")
+                .contains("form.getAttribute('action')")
+        );
+        assert!(
+            !include_str!("../../assets/js/streaming-catalog.js").contains("fetch(form.action")
+        );
     }
 
     #[test]

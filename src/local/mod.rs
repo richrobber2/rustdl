@@ -38,3 +38,4 @@ pub(crate) mod thumbnails;
 pub(crate) mod web_assets;
 pub(crate) mod x;
 pub(crate) mod youtube;
+pub(crate) mod youtube_playlist;

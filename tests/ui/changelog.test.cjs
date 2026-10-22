@@ -1,9 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const fs=require('node:fs');
-const path=require('node:path');
 const {JSDOM}=require('jsdom');
-const script=fs.readFileSync(path.join(__dirname,'../../assets/js/changelog.js'),'utf8');
+const script=require('./read-script.cjs')('changelog.js');
 const id=index=>'version-0-1-'+(45-index);
 const article=index=>`<article id="${id(index)}" data-release-index="${index}"><h2>Synthetic release ${index}</h2></article>`;
 function page(hash='') {

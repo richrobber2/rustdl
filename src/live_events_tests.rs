@@ -1,5 +1,6 @@
-use super::local;
-use super::local::web_assets::PLAYBACK_SCRIPT;
+// Source-shape checks; generated UI behavior is exercised separately in CI.
+const SOURCE_PLAYBACK_SCRIPT: &str = include_str!("../assets/js/playback.js");
+const SOURCE_QUEUE_SCRIPT: &str = include_str!("../assets/js/queue.js");
 
 #[test]
 fn rust_java_and_webview_share_a_typed_state_event_path() {
@@ -19,15 +20,12 @@ fn rust_java_and_webview_share_a_typed_state_event_path() {
 
 #[test]
 fn live_ui_updates_are_event_driven_with_a_slow_recovery_poll() {
-    assert!(PLAYBACK_SCRIPT.contains("addEventListener('rustdl:state'"));
-    assert_eq!(PLAYBACK_SCRIPT.matches("15000").count(), 2);
-    assert!(!PLAYBACK_SCRIPT.contains("setInterval(refreshState,2000)"));
-    assert!(local::live_events::QUEUE_SCRIPT.contains("article[data-filename]"));
-    assert!(local::live_events::QUEUE_SCRIPT.contains("updateArticle"));
-    assert!(local::live_events::QUEUE_SCRIPT.contains("replaceChildren"));
-    assert!(
-        local::live_events::QUEUE_SCRIPT
-            .contains("setInterval(()=>{if(!document.hidden)refresh()},15000)")
-    );
-    assert!(!local::live_events::QUEUE_SCRIPT.contains("http-equiv"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("addEventListener('rustdl:state'"));
+    assert_eq!(SOURCE_PLAYBACK_SCRIPT.matches("15000").count(), 2);
+    assert!(!SOURCE_PLAYBACK_SCRIPT.contains("setInterval(refreshState,2000)"));
+    assert!(SOURCE_QUEUE_SCRIPT.contains("article[data-filename]"));
+    assert!(SOURCE_QUEUE_SCRIPT.contains("updateArticle"));
+    assert!(SOURCE_QUEUE_SCRIPT.contains("replaceChildren"));
+    assert!(SOURCE_QUEUE_SCRIPT.contains("setInterval(()=>{if(!document.hidden)refresh()},15000)"));
+    assert!(!SOURCE_QUEUE_SCRIPT.contains("http-equiv"));
 }

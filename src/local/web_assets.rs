@@ -71,10 +71,9 @@ pub(in super::super) const DARK_SPACE_BACKGROUND_PLACEHOLDER: &str =
 
 pub(in super::super) const APPEARANCE_CSS: &str = include_str!("../../assets/css/appearance.css");
 
-pub(in super::super) const APPEARANCE_BOOT_SCRIPT: &str =
-    include_str!("../../assets/js/appearance-boot.js");
+pub(in super::super) const APPEARANCE_BOOT_SCRIPT: &str = include_js!("appearance-boot.js");
 
-pub(in super::super) const APPEARANCE_SCRIPT: &str = include_str!("../../assets/js/appearance.js");
+pub(in super::super) const APPEARANCE_SCRIPT: &str = include_js!("appearance.js");
 
 pub(in super::super) fn hashed_asset_path(name: &str, extension: &str, content: &str) -> String {
     let digest = blake3::hash(content.as_bytes()).to_hex();
@@ -260,10 +259,9 @@ pub(in super::super) fn view_transition_script_tag() -> String {
     )
 }
 
-pub(in super::super) const VIEW_TRANSITION_SCRIPT: &str =
-    include_str!("../../assets/js/view-transitions.js");
+pub(in super::super) const VIEW_TRANSITION_SCRIPT: &str = include_js!("view-transitions.js");
 
-pub(in super::super) const PLAYBACK_SCRIPT: &str = include_str!("../../assets/js/playback.js");
+pub(in super::super) const PLAYBACK_SCRIPT: &str = include_js!("playback.js");
 
 pub(in super::super) fn view_transition_name(filename: &str) -> String {
     let stem = filename

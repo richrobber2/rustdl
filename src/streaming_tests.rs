@@ -1,19 +1,20 @@
-use super::local::web_assets::PLAYBACK_SCRIPT;
+// These checks inspect source structure; UI tests separately execute generated scripts.
+const SOURCE_PLAYBACK_SCRIPT: &str = include_str!("../assets/js/playback.js");
 
 #[test]
 fn progressive_seek_uses_real_browser_buffer_ranges() {
-    assert!(PLAYBACK_SCRIPT.contains("video.buffered.start(index)"));
-    assert!(PLAYBACK_SCRIPT.contains("video.buffered.end(index)"));
-    assert!(PLAYBACK_SCRIPT.contains("const seekSafely="));
-    assert!(PLAYBACK_SCRIPT.contains("seekbackward:event=>seekBy"));
-    assert!(PLAYBACK_SCRIPT.contains("seekto:event=>{if(finite(event.seekTime))seekSafely"));
-    assert!(PLAYBACK_SCRIPT.contains("['progress','canplay','durationchange']"));
-    assert!(!PLAYBACK_SCRIPT.contains("requested>downloadFraction"));
-    assert!(PLAYBACK_SCRIPT.contains("const queuePreview="));
-    assert!(PLAYBACK_SCRIPT.contains("previewVideo.fastSeek"));
-    assert!(PLAYBACK_SCRIPT.contains("previewTimer=setTimeout"));
-    assert!(PLAYBACK_SCRIPT.contains("requested<=video.currentTime||isBuffered(requested)"));
-    assert!(PLAYBACK_SCRIPT.contains("<video muted playsinline preload=\"metadata\""));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("video.buffered.start(index)"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("video.buffered.end(index)"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("const seekSafely="));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("seekbackward:event=>seekBy"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("seekto:event=>{if(finite(event.seekTime))seekSafely"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("['progress','canplay','durationchange']"));
+    assert!(!SOURCE_PLAYBACK_SCRIPT.contains("requested>downloadFraction"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("const queuePreview="));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("previewVideo.fastSeek"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("previewTimer=setTimeout"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("requested<=video.currentTime||isBuffered(requested)"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("<video muted playsinline preload=\"metadata\""));
 }
 
 #[test]
@@ -32,6 +33,6 @@ fn growing_streams_wake_on_download_progress_without_busy_polling() {
 fn player_marks_complete_and_growing_media_explicitly() {
     let source = include_str!("../assets/html/download-result.html");
     assert!(source.contains(r#"data-growing="{growing}""#));
-    assert!(PLAYBACK_SCRIPT.contains("video.dataset.growing==='true'"));
-    assert!(PLAYBACK_SCRIPT.contains("if(!growing||"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("video.dataset.growing==='true'"));
+    assert!(SOURCE_PLAYBACK_SCRIPT.contains("if(!growing||"));
 }

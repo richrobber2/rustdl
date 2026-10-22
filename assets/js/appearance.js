@@ -24,8 +24,9 @@
     picture.className='rustdl-city-image';
     backdrop.append(picture);
     document.body.prepend(backdrop);
-    let sequence=null,animations=[],generation=0,loaded=null;
-    const stopSunrise=()=>{generation++;animations.forEach(animation=>animation.cancel());animations=[];sequence?.remove();sequence=null};
+    let sequence=null,generation=0,loaded=null;
+    const animations=new Set(),timers=new Set();
+    const stopSunrise=()=>{generation++;timers.forEach(timer=>clearTimeout(timer));timers.clear();animations.forEach(animation=>animation.cancel());animations.clear();sequence?.remove();sequence=null};
     const loadFrames=()=>{
       if(!loaded){
         const styles=getComputedStyle(root);
@@ -49,12 +50,37 @@
       if(token!==generation)return;
       if(!urls){stopSunrise();return}
       const ordered=target==='light'?urls:[...urls].reverse();
+      const frameAnimations=new Map();
+      const discardFirst=()=>{
+        const layer=container.firstElementChild,animation=frameAnimations.get(layer);
+        if(animation){frameAnimations.delete(layer);animations.delete(animation);animation.cancel()}
+        layer.remove();
+      };
+      const showFrame=url=>{
+        if(token!==generation)return;
+        // One opaque frame plus two overlapping 400ms fades at 280ms intervals.
+        // Bound layers even if the browser delivers delayed timers together.
+        while(container.childElementCount>=3)discardFirst();
+        const layer=document.createElement('div');layer.style.backgroundImage=url;container.append(layer);
+        const animation=layer.animate([{opacity:0},{opacity:1}],{duration:400,fill:'forwards',easing:'ease-in-out'});
+        animations.add(animation);
+        frameAnimations.set(layer,animation);
+        animation.finished.then(()=>{
+          animations.delete(animation);
+          frameAnimations.delete(layer);
+          if(token!==generation||layer.parentNode!==container)return;
+          layer.style.opacity='1';animation.cancel();
+          while(container.firstElementChild!==layer)discardFirst();
+          container.style.backgroundImage='none';
+        },()=>{animations.delete(animation);frameAnimations.delete(layer)});
+      };
       ordered.forEach((url,i)=>{
-        const layer=document.createElement('div');layer.style.backgroundImage=url;layer.style.opacity='0';container.append(layer);
-        animations.push(layer.animate([{opacity:0},{opacity:1}],{duration:400,delay:i*280,fill:'forwards',easing:'ease-in-out'}));
+        if(i===0){showFrame(url);return}
+        const timer=setTimeout(()=>{timers.delete(timer);showFrame(url)},i*280);
+        timers.add(timer);
       });
       const ending=container.animate([{opacity:1},{opacity:0}],{duration:700,delay:3600,fill:'forwards',easing:'ease-in-out'});
-      animations.push(ending);
+      animations.add(ending);
       ending.finished.then(()=>{if(token===generation)stopSunrise()},()=>{});
     };
     let frame=null;

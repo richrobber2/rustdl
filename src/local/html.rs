@@ -24,13 +24,42 @@ pub(in super::super) fn html_response(body: String) -> Response<std::io::Cursor<
         .with_header(local::html::header("X-Content-Type-Options", "nosniff"))
 }
 
+pub(in super::super) fn escaped_html_len(value: &str) -> usize {
+    value.len()
+        + value
+            .bytes()
+            .map(|byte| match byte {
+                b'&' | b'\'' => 4,
+                b'<' | b'>' => 3,
+                b'"' => 5,
+                _ => 0,
+            })
+            .sum::<usize>()
+}
+
 pub(in super::super) fn escape_html(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+    let mut output = String::with_capacity(escaped_html_len(value));
+    push_escaped_html(&mut output, value);
+    output
+}
+
+pub(in super::super) fn push_escaped_html(output: &mut String, value: &str) {
+    let mut start = 0;
+    for (index, byte) in value.bytes().enumerate() {
+        let entity = match byte {
+            b'&' => "&amp;",
+            b'<' => "&lt;",
+            b'>' => "&gt;",
+            b'"' => "&quot;",
+            b'\'' => "&#39;",
+            _ => continue,
+        };
+        // ASCII matches are UTF-8 boundaries; copy other text unchanged.
+        output.push_str(&value[start..index]);
+        output.push_str(entity);
+        start = index + 1;
+    }
+    output.push_str(&value[start..]);
 }
 
 pub(in super::super) fn html_csp() -> Header {
@@ -120,15 +149,24 @@ pub(in super::super) fn html_attribute<'a>(tag: &'a str, wanted: &str) -> Option
 }
 
 pub(in super::super) fn html_entity_decode(value: &str) -> String {
-    value
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&#x27;", "'")
-        .replace("&#39;", "'")
-        .replace("&#039;", "'")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
+    let mut decoded = std::borrow::Cow::Borrowed(value);
+    // Preserve the ordered replacements, including nested amp-encoded entities.
+    // A missing entity does not require a new String.
+    for (entity, text) in [
+        ("&amp;", "&"),
+        ("&quot;", "\""),
+        ("&#x27;", "'"),
+        ("&#39;", "'"),
+        ("&#039;", "'"),
+        ("&apos;", "'"),
+        ("&lt;", "<"),
+        ("&gt;", ">"),
+    ] {
+        if decoded.contains(entity) {
+            decoded = std::borrow::Cow::Owned(decoded.replace(entity, text));
+        }
+    }
+    decoded.into_owned()
 }
 
 pub(in super::super) fn safe_script_json<T: Serialize>(value: &T) -> io::Result<String> {
