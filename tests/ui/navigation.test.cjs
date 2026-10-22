@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {JSDOM,VirtualConsole}=require('jsdom');
 const script=require('./read-script.cjs');
-function fixture(t,supported=false){
+function fixture(t,supported=false,prepare=()=>{}){
  const console=new VirtualConsole();
  console.on('jsdomError',error=>{if(!error.message.includes('navigation'))throw error;});
  const dom=new JSDOM('<body><a id="local" href="/settings"><span>Settings</span></a><a id="next" href="/queue">Queue</a><a id="hash" href="#section">Here</a><a id="external" href="https://example.invalid/">External</a><a id="blank" target="_blank" href="/activity">New tab</a><a id="download" download href="/file">Download</a><a id="mode" href="rustdl://mode/normal">Mode</a></body>',{url:'http://localhost/',runScripts:'outside-only',pretendToBeVisual:true,virtualConsole:console});
@@ -10,7 +10,7 @@ function fixture(t,supported=false){
  t.after(()=>w.close());w.matchMedia=()=>({matches:false});
  w.setTimeout=(callback,delay)=>{assert.equal(delay,10000);timers.set(++serial,callback);return serial;};w.clearTimeout=id=>timers.delete(id);
  if(supported)w.document.startViewTransition=()=>{};
- w.eval(script('view-transitions.js'));return {w,d:w.document,timers};
+ prepare(w);w.eval(script('view-transitions.js'));return {w,d:w.document,timers};
 }
 function click(w,node,options={}){const e=new w.MouseEvent('click',{bubbles:true,cancelable:true,button:0,...options});node.dispatchEvent(e);return e;}
 test('local navigation gives immediate feedback without intercepting fallback navigation',t=>{
@@ -45,4 +45,21 @@ test('pointerdown and click select the same shared thumbnail only once',async t=
  const thumb=link.firstChild;link.dispatchEvent(new w.MouseEvent('pointerdown',{bubbles:true,button:0}));assert.equal(thumb.style.viewTransitionName,'video-synthetic');
  const changes=[];new w.MutationObserver(records=>changes.push(...records)).observe(thumb,{attributes:true,attributeFilter:['style']});
  click(w,link);await Promise.resolve();assert.equal(changes.length,0);
+});
+
+test('shared selection uses a weak reference and handles a collected thumbnail',t=>{
+ const refs=[];
+ const {w,d}=fixture(t,true,w=>{w.WeakRef=class{constructor(value){this.value=value;refs.push(this)}deref(){return this.value}}});
+ const makeCard=name=>{const link=d.createElement('a');link.className='media-card';link.href='/watch/'+name+'.mp4';link.innerHTML='<span class="media-thumb" data-view-transition-name="video-'+name+'"></span>';d.body.append(link);return link};
+ const old=makeCard('synthetic-old');old.dispatchEvent(new w.MouseEvent('pointerdown',{bubbles:true,button:0}));click(w,old);
+ assert.equal(refs.length,1);assert.equal(refs[0].deref(),old.firstChild);
+ old.remove();refs[0].value=undefined; // Simulate collection without relying on GC timing.
+ const next=makeCard('synthetic-next');click(w,next);
+ assert.equal(refs.length,2);assert.equal(refs[1].deref(),next.firstChild);assert.equal(next.firstChild.style.viewTransitionName,'video-synthetic-next');
+});
+test('shared selection remains correct when WeakRef is unavailable',t=>{
+ const {w,d}=fixture(t,true,w=>{w.WeakRef=undefined});
+ const link=d.createElement('a');link.className='media-card';link.href='/watch/synthetic.mp4';link.innerHTML='<span class="media-thumb" data-view-transition-name="video-synthetic"></span>';d.body.append(link);
+ link.dispatchEvent(new w.MouseEvent('pointerdown',{bubbles:true,button:0}));click(w,link);
+ assert.equal(link.firstChild.style.viewTransitionName,'video-synthetic');
 });

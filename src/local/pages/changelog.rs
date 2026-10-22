@@ -8,6 +8,7 @@ pub(in super::super::super) const CHANGELOG: &[(&str, &[&str])] = &[
     (
         "0.1.45",
         &[
+            "Avoided retaining removed gallery cards in the shared-thumbnail selection cache by using a weak reference, with a no-cache fallback for older WebViews; clarified cached-listing gallery timing and the three-render DHAT measurement mix. Added synthetic collected-target and WeakRef fallback checks.",
             "Reduced large-gallery page-generation copies by filling the small page shell before inserting the gallery index, and preserved literal shell markers in gallery data; added opt-in synthetic gallery, queue and page timing/allocation benchmarks with output checksums and automatic fixture cleanup.",
             "Shortened shared page transitions to 160 ms with opacity-only root fades, enabled consistent same-origin transitions across app pages, and added immediate local-link feedback with cancellation, timeout and back/forward cleanup while retaining reduced-motion behavior and normal navigation.",
             "Reduced format-preparation memory by sharing immutable discovery sessions instead of copying each selected item’s complete format list and provider URLs; discovery pages now move candidate storage into the same session, while format order, deduplication and selection tokens are preserved.",

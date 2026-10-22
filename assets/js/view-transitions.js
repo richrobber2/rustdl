@@ -54,9 +54,10 @@
   const selectSharedElement=link=>{
     const selected=link.querySelector('.media-thumb');
     const name=transitionName(link);
-    if(!selected||!name||lastShared===selected&&selected.style.viewTransitionName===name)return;
+    if(!selected||!name||lastShared?.deref()===selected&&selected.style.viewTransitionName===name)return;
     document.querySelectorAll('.media-thumb').forEach(thumb=>{thumb.style.viewTransitionName='none'});
-    selected.style.viewTransitionName=name;lastShared=selected;
+    // Remember the selection without retaining a card removed by gallery refresh.
+    selected.style.viewTransitionName=name;lastShared=typeof WeakRef==='function'?new WeakRef(selected):null;
   };
   const mediaLink=target=>target instanceof Element?target.closest('a.media-card[href^="/watch/"]'):null;
   addEventListener('pointerdown',event=>{

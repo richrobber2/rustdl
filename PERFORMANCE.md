@@ -342,6 +342,11 @@ output validation and a BLAKE3 checksum; unequal output aborts the run. `firstNs
 is a fresh-process first render, **not** a cold-storage measurement: creating the
 fixture has already warmed filesystem caches. These timings exclude HTTP,
 WebView layout/painting, thumbnails, network requests and user interaction.
+For gallery workloads, the first render scans and sorts the synthetic directory.
+The five warmups and measured samples reuse the process-local listing cache
+because the directory remains unchanged. Steady-state gallery timings therefore
+measure page generation with a cached listing, excluding directory scanning and
+sorting; they are not measurements of refreshing a changed library.
 Use odd sample counts for an unambiguous median. These page workloads also work
 with `scripts/profile-heap.sh` for separate allocation measurements; never use
 DHAT timings as production latency estimates.
@@ -382,6 +387,10 @@ A separate DHAT run of three 5,000-entry gallery renders measured:
 | Total allocation blocks | 301,777 | 301,777 |
 | Bytes retained at end | 286,290 | 286,290 |
 
+This allocation run includes one directory scan followed by two cached-listing
+renders. The totals and percentages describe that three-render mix, not a
+per-render allocation guarantee.
+
 That is 37.4% fewer allocated bytes and 56.8% lower measured peak heap, with
 unchanged block count and end retention. Gallery cache creation and first-use
 asset initialization are included in this allocation window; fixture creation
@@ -395,3 +404,13 @@ Validation: 107 Rust library tests passed, with four existing live-network tests
 ignored. The shell-marker regression passed in both shell modes. Script argument
 rejection, a one-sample percentile check and empty synthetic-fixture parent after
 all runs were also verified. Formatting and whitespace checks passed.
+
+### Review follow-up: shared-thumbnail lifetime
+
+Navigation keeps its last selected thumbnail in a `WeakRef`, so gallery updates
+can release removed cards without waiting for another media-card interaction.
+The pointerdown/click optimization still avoids repeating the gallery-wide style
+pass for the same live thumbnail. Older WebViews without `WeakRef` perform the
+style pass for each event without caching a node. Synthetic tests cover collected
+weak targets, repeated selection and the unsupported-browser fallback; they do
+not measure actual garbage-collection timing or browser memory.
