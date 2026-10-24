@@ -136,7 +136,7 @@ if [ "$DEV" = 1 ]; then
     mkdir -p "$BUILD_DIR/apk/assets/dev"
     cp "$ROOT_DIR/assets/html/index.html" "$ROOT_DIR/assets/html/gallery.html" \
         "$ROOT_DIR/assets/css/index.css" "$ROOT_DIR/assets/css/appearance.css" \
-        "$ROOT_DIR/assets/js/playback.js" "$ROOT_DIR/src/dev/visual-scroll.js" "$ROOT_DIR/src/dev/visual-smoke.js" "$ROOT_DIR/src/dev/visual-audit.js" "$ROOT_DIR/src/dev/visual-canary.js" "$ROOT_DIR/src/dev/visual-batch500.js" "$ROOT_DIR/src/dev/real-gallery-metrics.js" \
+        "$ROOT_DIR/assets/js/playback.js" "$ROOT_DIR/src/dev/visual-scroll.js" "$ROOT_DIR/src/dev/visual-smoke.js" "$ROOT_DIR/src/dev/visual-audit.js" "$ROOT_DIR/src/dev/visual-canary.js" "$ROOT_DIR/src/dev/visual-batch500.js" "$ROOT_DIR/src/dev/visual-webview-metrics.js" "$ROOT_DIR/src/dev/visual-webview-run.js" "$ROOT_DIR/src/dev/real-gallery-metrics.js" \
         "$BUILD_DIR/apk/assets/dev/"
     cp "$ROOT_DIR/assets/images/aniwaves-rainy-city.webp" "$BUILD_DIR/apk/assets/dev/rainy-city.webp"
     cp "$ROOT_DIR/assets/images/aniwaves-rainy-city-light.webp" "$BUILD_DIR/apk/assets/dev/rainy-city-light.webp"

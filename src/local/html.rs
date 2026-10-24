@@ -170,18 +170,71 @@ pub(in super::super) fn html_entity_decode(value: &str) -> String {
 }
 
 pub(in super::super) fn safe_script_json<T: Serialize>(value: &T) -> io::Result<String> {
-    serde_json::to_string(value)
-        .map(|json| {
-            json.replace('<', "\\u003c")
-                .replace('>', "\\u003e")
-                .replace('&', "\\u0026")
-        })
-        .map_err(io::Error::other)
+    // Escape string fragments during serialization rather than copying the
+    // complete JSON buffer once for each HTML delimiter.
+    struct ScriptFormatter;
+    impl serde_json::ser::Formatter for ScriptFormatter {
+        fn write_string_fragment<W: io::Write + ?Sized>(
+            &mut self,
+            writer: &mut W,
+            fragment: &str,
+        ) -> io::Result<()> {
+            // Most playlist strings contain no HTML delimiters. The byte
+            // search avoids a scalar pass through those fragments.
+            if memchr::memchr3(b'<', b'>', b'&', fragment.as_bytes()).is_none() {
+                return writer.write_all(fragment.as_bytes());
+            }
+            let mut start = 0;
+            for (index, byte) in fragment.bytes().enumerate() {
+                let escaped: &[u8] = match byte {
+                    b'<' => b"\\u003c",
+                    b'>' => b"\\u003e",
+                    b'&' => b"\\u0026",
+                    _ => continue,
+                };
+                writer.write_all(&fragment.as_bytes()[start..index])?;
+                writer.write_all(escaped)?;
+                start = index + 1;
+            }
+            writer.write_all(&fragment.as_bytes()[start..])
+        }
+    }
+    let mut bytes = Vec::with_capacity(128);
+    value
+        .serialize(&mut serde_json::Serializer::with_formatter(
+            &mut bytes,
+            ScriptFormatter,
+        ))
+        .map_err(io::Error::other)?;
+    String::from_utf8(bytes).map_err(io::Error::other)
 }
 
 #[cfg(test)]
 mod tests {
     use super::html_entity_decode;
+
+    #[test]
+    fn safe_script_json_preserves_exact_escaping_and_roundtrips() {
+        let controls: String = (0..=127).map(char::from).collect();
+        let values = [
+            serde_json::json!({"<key>&": ["</script><img src=x>", "雪 🦀", "\\u003c", "\u{2028}\u{2029}", controls]}),
+            serde_json::json!({"plain": [null, true, false, 123, -1.25]}),
+        ];
+        for value in values {
+            let actual = super::safe_script_json(&value).unwrap();
+            let expected = serde_json::to_string(&value)
+                .unwrap()
+                .replace('<', "\\u003c")
+                .replace('>', "\\u003e")
+                .replace('&', "\\u0026");
+            assert_eq!(actual, expected);
+            assert!(!actual.contains(['<', '>', '&']));
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
+                value
+            );
+        }
+    }
 
     #[test]
     fn decodes_common_apostrophe_entities_without_leaking_markup() {

@@ -70,6 +70,20 @@ for name in ['playlist', 'quality', 'queue']:
  filename=f'screen-{name}-500.html';(out/filename).write_text(text)
  for profile in ['w280','w320','w360','w393','w412','w480','w540','w600','w720','w768','w900','w1024','w393-text150','w393-landscape','w600-landscape','w768-landscape','w1024-landscape']:
   cases.append({'name':f'{name}-500/{profile}','asset':filename,'profile':profile,'script':'visual-batch500.js','coverage':'500 synthetic entries; production styles and playlist/quality interactions; no network or media decoding'})
+# Metrics-only fixtures use the current JSON-backed playlist and production behavior.
+for count in (100,1000,5000):
+ entries=[{'video_id':f'fixture{i:06}', 'title':f'Synthetic video {i} </script>& 雪', 'author':f'Artist {i%2}'} for i in range(count)]
+ replacements={'DISCOVERY_CSS':(root/'assets/css/discovery.css').read_text(),
+  'page_css':(root/'assets/css/playlist.css').read_text(),'playlist_title':'Synthetic WebView metrics',
+  'count':str(count),'token':'synthetic','entries':json.dumps(entries).replace('<',r'\u003c').replace('>',r'\u003e').replace('&',r'\u0026'),
+  'page_script':(root/'assets/js/playlist.js').read_text(),'dev_reload':''}
+ text=re.sub(r'\{([A-Za-z_][A-Za-z0-9_]*)\}',lambda m:replacements.get(m[1],m[0]),(root/'assets/html/playlist.html').read_text())
+ text=text.replace('<html ',f'<html data-synthetic-count="{count}" ',1)
+ text=text.replace('<head>','<head><script>'+(root/'src/dev/visual-webview-metrics.js').read_text()+'</script>',1)
+ text=text.replace('</body>','<script>document.addEventListener("submit",e=>e.preventDefault());</script></body>')
+ filename=f'webview-metrics-{count}.html';(out/filename).write_text(text)
+ cases.append({'name':f'webview-metrics-{count}/native','asset':filename,'profile':'native','script':'visual-webview-run.js',
+  'coverage':'Current synthetic playlist; production CSS/JS; numeric metrics only; no screenshot'})
 for script in sorted((root/'assets/js').glob('*.js')):
  if script.name!='playback.js':missing.append({'target':str(script.relative_to(root)),'reason':'Behavior/interactions not exercised by visual smoke fixtures'})
 manifest=(root/'android/AndroidManifest.xml').read_text()

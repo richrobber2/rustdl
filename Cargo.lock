@@ -1622,6 +1622,7 @@ dependencies = [
  "chacha20poly1305",
  "dhat",
  "jni",
+ "memchr",
  "qrcode",
  "reqwest",
  "rquickjs-sys",

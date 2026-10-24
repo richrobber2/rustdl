@@ -29,6 +29,7 @@ bench = false
 [dependencies]
 dhat = { version = "=0.3.3", optional = true }
 blake3 = "1.8"
+memchr = "2.8"
 chacha20poly1305 = "0.10"
 qrcode = { version = "0.14", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

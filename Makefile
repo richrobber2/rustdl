@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help setup native-setup check apk native-apk legacy-apk test run dev dev-test dev-apk dev-visual dev-real-gallery hooks
+.PHONY: help setup native-setup check apk native-apk legacy-apk test run dev dev-test dev-apk dev-visual dev-real-gallery dev-webview-metrics hooks
 
 help:
 	@echo "RustDL"
@@ -66,3 +66,7 @@ dev-visual:
 # Actual gallery, numeric counters only. Requires the installed development APK.
 dev-real-gallery:
 	python3 src/dev/run-real-gallery.py
+
+# Numeric-only synthetic WebView suite; never captures screenshots.
+dev-webview-metrics:
+	python3 src/dev/run-visual.py --metrics-only

@@ -3,6 +3,8 @@
 use super::{local, workflows};
 use std::sync::{Arc, Barrier, Mutex};
 
+pub(crate) struct PlaylistPreviewFixture(local::discovery::PlaylistSession);
+
 pub(crate) struct PlaylistFixture(Vec<local::playlist_resolution::Selection>);
 
 pub(crate) struct GalleryFixture {
@@ -55,6 +57,7 @@ pub(crate) enum Workload {
     Gallery(GalleryFixture),
     QueuePage(usize),
     PlaylistPage(String, bool),
+    PlaylistPreview(PlaylistPreviewFixture),
     Changelog,
     Catalog(String),
     Queue(usize),
@@ -65,6 +68,23 @@ pub(crate) enum Workload {
 impl Workload {
     pub(crate) fn new(name: &str) -> Result<Self, &'static str> {
         match name {
+            "playlist-preview-100" | "playlist-preview-1000" | "playlist-preview-5000" => {
+                let count: usize = name.rsplit('-').next().unwrap().parse().unwrap();
+                Ok(Self::PlaylistPreview(PlaylistPreviewFixture(
+                    local::discovery::PlaylistSession {
+                        created: 0,
+                        playlist_id: "PLsynthetic".to_owned(),
+                        title: "Synthetic preview".to_owned(),
+                        entries: (0..count)
+                            .map(|i| local::youtube::YouTubePlaylistEntry {
+                                video_id: format!("entry{i:06}"),
+                                title: format!("Synthetic {i} </script>& 雪 {}", "x".repeat(96)),
+                                author: format!("Creator {i}"),
+                            })
+                            .collect(),
+                    },
+                )))
+            }
             "activity" => Ok(Self::Activity),
             "page-activity" => Ok(Self::ActivityPage),
             "page-settings" => Ok(Self::SettingsPage),
@@ -237,6 +257,32 @@ impl Workload {
         let mut checksum = 0usize;
         for _ in 0..iterations {
             let size = match self {
+                Self::PlaylistPreview(PlaylistPreviewFixture(session)) => {
+                    let body = local::discovery::render_playlist_selection("synthetic", session)
+                        .map_err(|_| "preview render failed")?;
+                    let marker = "<script id=\"playlist-data\" type=\"application/json\">";
+                    let data = body
+                        .split_once(marker)
+                        .ok_or("missing preview data")?
+                        .1
+                        .split_once("</script>")
+                        .ok_or("unterminated preview data")?
+                        .0;
+                    // Validate without allocating a second decoded playlist during profiling.
+                    if data.matches("\"video_id\":").count() != session.entries.len()
+                        || data.contains('<')
+                        || data.contains('>')
+                        || data.contains('&')
+                    {
+                        return Err("preview data lost entries or escaping");
+                    }
+                    let body = local::web_assets::decorate_app_html(body);
+                    u64::from_le_bytes(
+                        blake3::hash(body.as_bytes()).as_bytes()[..8]
+                            .try_into()
+                            .unwrap(),
+                    ) as usize
+                }
                 Self::PlaylistPage(html, baseline) => {
                     let json = local::youtube::initial_data(html)
                         .map_err(|_| "initial data extraction failed")?;

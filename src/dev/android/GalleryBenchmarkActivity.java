@@ -19,7 +19,7 @@ public final class GalleryBenchmarkActivity extends Activity {
     private JSONArray suiteCases=new JSONArray(), visualCases=new JSONArray();
     private JSONObject suiteCoverage=new JSONObject();
     private int caseIndex;
-    private boolean suiteMode;
+    private boolean suiteMode, metricsOnly;
     private String runId="manual";
     private TextView status;
     private ServerSocket server;
@@ -91,10 +91,16 @@ public final class GalleryBenchmarkActivity extends Activity {
     private void startRun(){
         try {
             runId=getIntent().getStringExtra("run_id");if(runId==null)runId="manual";
-            suiteMode=getIntent().getBooleanExtra("suite",false);caseIndex=0;visualCases=new JSONArray();
+            metricsOnly=getIntent().getBooleanExtra("metrics_only",false);
+            suiteMode=metricsOnly||getIntent().getBooleanExtra("suite",false);caseIndex=0;visualCases=new JSONArray();
             synchronized(phases){while(phases.length()>0)phases.remove(0);}
             suiteCoverage=new JSONObject(asset("suite.json"));suiteCases=suiteCoverage.getJSONArray("cases");
-            if(getIntent().getBooleanExtra("batch500",false)){
+            if(metricsOnly){
+                JSONArray selected=new JSONArray();
+                for(int i=0;i<suiteCases.length();i++)if(suiteCases.getJSONObject(i).getString("name").startsWith("webview-metrics-"))selected.put(suiteCases.getJSONObject(i));
+                if(selected.length()!=3)throw new IllegalStateException("Missing metrics fixtures");
+                suiteCases=selected;
+            }else if(getIntent().getBooleanExtra("batch500",false)){
                 suiteMode=true;JSONArray selected=new JSONArray();
                 for(int i=0;i<suiteCases.length();i++)if(suiteCases.getJSONObject(i).getString("name").contains("-500/"))selected.put(suiteCases.getJSONObject(i));
                 suiteCases=selected;
@@ -103,8 +109,8 @@ public final class GalleryBenchmarkActivity extends Activity {
         }catch(Exception error){status.setText("Visual suite setup failed: "+error.getClass().getSimpleName());}
     }
     private void loadCase()throws Exception {
-        if(getIntent().getBooleanExtra("batch500",false)&&caseIndex>=suiteCases.length()){
-            new ResultsBridge().complete("{\"aborted\":false,\"method\":\"500-entry synthetic WebView layout, interaction, and scroll test\"}");return;
+        if((metricsOnly||getIntent().getBooleanExtra("batch500",false))&&caseIndex>=suiteCases.length()){
+            new ResultsBridge().complete(metricsOnly?"{\"aborted\":false,\"method\":\"Synthetic WebView metrics without captures\"}":"{\"aborted\":false,\"method\":\"500-entry synthetic WebView layout, interaction, and scroll test\"}");return;
         }
         boolean screen=suiteMode&&caseIndex<suiteCases.length();
         JSONObject item=screen?suiteCases.getJSONObject(caseIndex):new JSONObject();
@@ -163,8 +169,8 @@ public final class GalleryBenchmarkActivity extends Activity {
             main.post(()->{
                 try{JSONObject result=new JSONObject(json);JSONObject item=suiteCases.getJSONObject(caseIndex);
                     result.put("name",item.getString("name")).put("coverage",item.getString("coverage"));addFrameMetrics(result);
-                    Runnable next=()->{visualCases.put(result);caseIndex++;publishProgress();main.postDelayed(()->{try{loadCase();}catch(Exception error){status.setText("Could not load next visual case");}},100);};
-                    if(!result.optBoolean("pass")&&failureScreenshots.size()<12)captureFailure(result,next);else next.run();
+                    Runnable next=()->{visualCases.put(result);if(metricsOnly&&result.optBoolean("aborted")){new ResultsBridge().complete("{\"aborted\":true,\"method\":\"WebView metrics interrupted\"}");return;}caseIndex++;publishProgress();main.postDelayed(()->{try{loadCase();}catch(Exception error){status.setText("Could not load next visual case");}},100);};
+                    if(!metricsOnly&&!result.optBoolean("pass")&&failureScreenshots.size()<12)captureFailure(result,next);else next.run();
                 }catch(Exception error){status.setText("Invalid visual case result");}
             });
         }
@@ -180,6 +186,7 @@ public final class GalleryBenchmarkActivity extends Activity {
     }
 
     private void captureFailure(JSONObject reportCase,Runnable next){
+        if(metricsOnly){next.run();return;}
         try {
             Bitmap bitmap=Bitmap.createBitmap(getWindow().getDecorView().getWidth(),getWindow().getDecorView().getHeight(),Bitmap.Config.ARGB_8888);
             final String key="/failure-"+caseIndex+".png";
@@ -192,7 +199,9 @@ public final class GalleryBenchmarkActivity extends Activity {
         }catch(Exception error){next.run();}
     }
     private void capture(){
+        if(metricsOnly)return;
         main.postDelayed(()->{
+            if(metricsOnly)return;
             Bitmap bitmap=Bitmap.createBitmap(getWindow().getDecorView().getWidth(),getWindow().getDecorView().getHeight(),Bitmap.Config.ARGB_8888);
             PixelCopy.request(getWindow(),bitmap,result->{
                 if(result==PixelCopy.SUCCESS){ByteArrayOutputStream out=new ByteArrayOutputStream();bitmap.compress(Bitmap.CompressFormat.PNG,100,out);screenshot=out.toByteArray();}bitmap.recycle();
@@ -211,7 +220,7 @@ public final class GalleryBenchmarkActivity extends Activity {
             }catch(IOException ignored){}
         }},"dev-benchmark-results").start();
     }
-    @Override public void onPause(){super.onPause();if(web!=null)web.evaluateJavascript("window.stopVisualBenchmark?.()",null);}
+    @Override public void onPause(){super.onPause();if(web!=null)web.evaluateJavascript("window.stopVisualBenchmark?.();window.RustDLRenderingMetrics?.abort()",null);}
     @Override public void onDestroy(){
         if(listener!=null)getWindow().removeOnFrameMetricsAvailableListener(listener);
         if(metricsThread!=null)metricsThread.quitSafely();

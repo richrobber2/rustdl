@@ -223,3 +223,42 @@ Orientation coverage includes portrait and landscape profiles. The activity requ
 the matching orientation before each case and records the effective viewport in the
 case result. Landscape profiles still use fixed CSS widths; the device may cap a
 profile larger than its physical display.
+
+## WebView rendering metrics without screenshots
+
+`make dev-webview-metrics` runs the installed development APK's metrics-only
+suite. Build it with `make dev-apk` first and install that development APK using
+the normal app deployment procedure. It exercises current production playlist
+CSS and JavaScript with 100, 1,000 and 5,000 synthetic JSON entries. Both native
+screenshot capture paths are disabled in this mode; the runner saves JSON only.
+The host still needs to be visible and unlocked for meaningful frame timings.
+
+The six actions are next page, previous page, select all, clear selection, filter
+and clear filter. Each checks its result and the identity of the reusable row
+pool. Measurements include synchronous handler time, an explicit forced geometry
+read, time through two requestAnimationFrame callbacks, numeric container/dock
+geometry, long tasks and layout-shift scores where supported. Unsupported values
+are null. Observer queues are drained and disconnected; background interruptions
+fail the run. First contentful paint is recorded when the WebView exposes it.
+Native window frame durations and missed deadlines remain separate measurements.
+
+These are programmatic interactions, not finger-input latency or presented-frame
+measurements. Two rAF callbacks do not prove presentation. Geometry reads perturb
+layout timing. Layout-shift sums include initial load and are not session-window
+CLS; recent-input exclusions are also reported separately. Native frame metrics
+cover the host window, not just WebView GPU work. Cross-document navigation,
+network delays, media decoding and process RSS are outside this suite.
+
+Result: `target/gallery-performance/webview-metrics-report.json`. Build/source
+hash checks in the runner reject stale APKs. No results should be reported as
+actual WebView measurements until this device suite has run.
+
+Fixture/contract checks (jsdom cannot validate layout or paint timing):
+
+```sh
+python3 src/dev/prepare-visual.py target/webview-metrics-check/assets
+NODE_PATH=tests/ui/node_modules node --test src/dev/visual-webview-metrics.test.cjs
+```
+
+Metric semantics: [Layout Instability API](https://wicg.github.io/layout-instability/)
+and [Android FrameMetrics](https://developer.android.com/reference/android/view/FrameMetrics).

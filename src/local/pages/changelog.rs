@@ -8,6 +8,10 @@ pub(in super::super::super) const CHANGELOG: &[(&str, &[&str])] = &[
     (
         "0.1.45",
         &[
+            "Added a development-only, screenshot-free WebView metrics suite for synthetic playlist pagination, selection and filtering, with layout-shift and frame counters, reusable-row checks and interruption handling.",
+            "Added an on-demand synthetic full-page comparison tool with alternating before/after runs, output verification, timing and peak RSS reports; incomplete runs cannot report performance gains. Updated playlist profiler help.",
+            "Sped up script-safe JSON serialization for ordinary text with a delimiter-search fast path while retaining the streaming encoder and its allocation savings; verified exact output and measured speed, DHAT heap use, and process RSS with synthetic fixtures.",
+            "Reduced playlist-preview JSON escaping copies by encoding HTML delimiters during serialization, preserving exact script-safe output; added synthetic 100/1,000/5,000-entry DHAT rendering workloads with count and output checksums.",
             "Avoided retaining removed gallery cards in the shared-thumbnail selection cache by using a weak reference, with a no-cache fallback for older WebViews; clarified cached-listing gallery timing and the three-render DHAT measurement mix. Added synthetic collected-target and WeakRef fallback checks.",
             "Reduced large-gallery page-generation copies by filling the small page shell before inserting the gallery index, and preserved literal shell markers in gallery data; added opt-in synthetic gallery, queue and page timing/allocation benchmarks with output checksums and automatic fixture cleanup.",
             "Shortened shared page transitions to 160 ms with opacity-only root fades, enabled consistent same-origin transitions across app pages, and added immediate local-link feedback with cancellation, timeout and back/forward cleanup while retaining reduced-motion behavior and normal navigation.",

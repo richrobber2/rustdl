@@ -414,3 +414,80 @@ pass for the same live thumbnail. Older WebViews without `WeakRef` perform the
 style pass for each event without caching a node. Synthetic tests cover collected
 weak targets, repeated selection and the unsupported-browser fallback; they do
 not measure actual garbage-collection timing or browser memory.
+
+### Playlist preview JSON escaping
+
+Synthetic preview workloads are available as `playlist-preview-100`,
+`playlist-preview-1000` and `playlist-preview-5000` with `scripts/profile-heap.sh`.
+They render real selection pages, decorate the HTML, validate the embedded entry
+count and script escaping, and hash the final page. Fixture construction is
+outside profiling; all titles and entries are synthetic and no resolver runs.
+
+The streaming script-safe JSON formatter avoids three full-buffer replacements.
+In the local three-process comparison at 5,000 entries (three renders per
+process), cumulative tracked allocations fell from 54,946,275 to 28,951,188 bytes
+and peak tracked heap fell from 6,873,619 to 3,134,394 bytes. Final output hashes
+matched at 100, 1,000 and 5,000 entries. These are Rust heap measurements, not
+whole-app Android RSS or interaction timing. Existing cached allocations at the
+end of each fresh process remained unchanged.
+
+### Script-safe JSON encoder speed
+
+A `memchr3` fast path writes fragments without `<`, `>` or `&` directly, while
+fragments requiring escaping retain the existing scalar encoder. `memchr` was
+already locked at 2.8.3; it is now an explicit dependency.
+
+A local normal-allocator microbenchmark serialized 5,000 synthetic entries in
+three cases (plain, sparse escaping, dense escaping). Across three fresh process
+repeats per variant, each taking 11 timing samples of five encodes, median time
+fell about 21% for plain text, 1.3% for sparse escaping and 0.8% for dense escaping.
+This is serializer timing, not full-page generation or Android UI latency.
+
+Eighteen fresh DHAT processes found identical cumulative allocations, peak heap,
+retained heap and checksums between the scalar and final encoder. Separate peak
+process RSS medians increased by 12–76 KiB in these synthetic benchmarks; exact
+RSS neutrality is not claimed. The streaming JSON optimization remains in place,
+but final whole-page RSS and timing have not been remeasured. Raw local results
+are in `device-assistant/review/playlist-speed/` in the Downloads workspace.
+
+### Reproducible full-page comparisons
+
+`scripts/compare-page-render.py` compares two saved normal-allocator
+`rustdl-page-bench` executables on synthetic playlist previews. Build with
+`cargo build --locked --profile profiling --features heap-profile --bin rustdl-page-bench`
+and copy each revision's executable to a separate path before rebuilding.
+On Termux, set `BINDGEN_EXTRA_CLANG_ARGS=--target=aarch64-linux-android24`
+and the local toolchain library path when building, as in `profile-heap.sh`.
+The feature exposes fixtures; this executable does not install the DHAT allocator.
+
+Example from the repository root:
+
+```sh
+python scripts/compare-page-render.py \
+  --before /absolute/path/before-page-bench \
+  --after /absolute/path/after-page-bench \
+  --before-build 'BASE_REV profiling heap-profile normal allocator' \
+  --after-build 'CANDIDATE_REV profiling heap-profile normal allocator'
+```
+
+On this Android workspace, add `--root-helper ../device-assistant/root.sh` to
+use Toybox time/timeout via the established root helper. Linux uses GNU time and
+timeout. No background monitor or memory polling is started. Both binaries must
+support the selected preview workloads; older binaries without them fail explicitly.
+
+The default is three fresh-process pairs for each of 100, 1,000 and 5,000 entries,
+with 11 timed samples per process. Execution alternates before/after order. Reports
+include first-render, median and p95 render times, peak process RSS, paired deltas,
+observed ranges, executable hashes, kernel/architecture and caller-supplied build
+identities. Output checksums must agree across every pair and repetition per size.
+Nonzero exits, invalid measurements or mismatched output leave an incomplete report
+and no performance summary. Raw stdout/stderr are retained in a private unique
+`target/page-comparisons/render-*` directory; existing reports are not overwritten.
+
+Timing includes validation and page hashing, and excludes synthetic fixture setup.
+Peak RSS includes setup and the complete process. These are server-side rendering
+measurements, not browser layout/paint or Android interaction latency. Build labels
+are descriptive, not compiler-attested provenance. Run the separate DHAT workloads
+to validate allocation savings. Comparing a binary to itself is a tool smoke test,
+not evidence of an optimization. Unit tests for the runner can be run with:
+`python -m unittest discover -s scripts -p test_compare_page_render.py`.

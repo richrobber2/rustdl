@@ -4,9 +4,15 @@ from pathlib import Path
 from visual_report import write_report
 root=Path(__file__).resolve().parents[2]
 batch500='--batch500' in sys.argv
+metrics_only='--metrics-only' in sys.argv
+if batch500 and metrics_only:raise SystemExit('Choose one suite mode')
 manifest=root/'target/android-termux-alongside-dev/apk/assets/dev/suite.json'
 if not manifest.exists():raise SystemExit('Build and install make dev-apk first')
 coverage=json.loads(manifest.read_text())
+if metrics_only:
+ coverage['cases']=[case for case in coverage['cases'] if case['name'].startswith('webview-metrics-')]
+ if len(coverage['cases'])!=3:raise SystemExit('Rebuild dev APK with all three metrics fixtures')
+ coverage['missing']=[{'target':'WebView metrics scope','reason':'Synthetic pagination only; no cross-document navigation, network, media or RSS'}]
 if batch500:
  coverage['cases']=[case for case in coverage['cases'] if '-500/' in case['name']]
  coverage['missing']=[]
@@ -32,7 +38,7 @@ if 'NODE_PATH' not in node_env:
   if (dependencies/'jsdom').is_dir():node_env['NODE_PATH']=str(dependencies);break
 subprocess.run(['node','--test',str(root/'src/dev/visual-audit.test.cjs'),str(root/'src/dev/visual-smoke.test.cjs')],env=node_env,check=True)
 run_id=uuid.uuid4().hex
-subprocess.run(['am','start','-n','app.rustdl.next/app.rustdl.GalleryBenchmarkActivity','--ez','auto','true','--ez','suite','true','--es','run_id',run_id]+(['--ez','batch500','true'] if batch500 else []),check=True)
+subprocess.run(['am','start','-n','app.rustdl.next/app.rustdl.GalleryBenchmarkActivity','--ez','auto','true','--ez','suite','true','--es','run_id',run_id]+(['--ez','batch500','true'] if batch500 else [])+(['--ez','metrics_only','true'] if metrics_only else []),check=True)
 seen=set();started=time.monotonic()
 while time.monotonic()-started<max(240,len(coverage['cases'])*4+90):
  try:
@@ -43,7 +49,7 @@ while time.monotonic()-started<max(240,len(coverage['cases'])*4+90):
    if case['name'] in seen:continue
    seen.add(case['name'])
    screenshot=case.get('screenshot','')
-   if screenshot.startswith('/failure-') and screenshot.endswith('.png') and '/' not in screenshot[1:]:
+   if not metrics_only and screenshot.startswith('/failure-') and screenshot.endswith('.png') and '/' not in screenshot[1:]:
     try:
      dest=root/'target/gallery-performance/visual-failures'/run_id/screenshot[1:];dest.parent.mkdir(parents=True,exist_ok=True)
      with urllib.request.urlopen('http://127.0.0.1:39090'+screenshot,timeout=5) as response:dest.write_bytes(response.read())
@@ -51,8 +57,8 @@ while time.monotonic()-started<max(240,len(coverage['cases'])*4+90):
     except OSError as error:print('MISSING screenshot: '+str(error),flush=True)
    print(('PASS ' if case.get('pass') else 'FAIL ')+case['name']+' '+json.dumps(case),flush=True)
   if report.get('state')=='complete':
-   out=root/('target/gallery-performance/batch500-visual-report.json' if batch500 else 'target/gallery-performance/visual-suite-report.json');out.parent.mkdir(parents=True,exist_ok=True);out.write_text(json.dumps(report,indent=2))
-   write_report(report,out.with_suffix('.html'),root/'target/gallery-performance/visual-failures'/run_id)
+   out=root/('target/gallery-performance/webview-metrics-report.json' if metrics_only else 'target/gallery-performance/batch500-visual-report.json' if batch500 else 'target/gallery-performance/visual-suite-report.json');out.parent.mkdir(parents=True,exist_ok=True);out.write_text(json.dumps(report,indent=2))
+   if not metrics_only:write_report(report,out.with_suffix('.html'),root/'target/gallery-performance/visual-failures'/run_id)
    for phase in report.get('results',[]):print('SCROLL '+json.dumps(phase),flush=True)
    print(f'COMPLETE {len(seen)}/{len(coverage["cases"])} visual cases; {len(coverage["missing"])} coverage gaps; report: {out}',flush=True)
    raise SystemExit(1 if report.get('aborted') or len(seen)!=len(coverage['cases']) or any(not c.get('pass') for c in report.get('visualCases',[])) else 0)
